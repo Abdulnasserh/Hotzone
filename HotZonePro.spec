@@ -5,7 +5,7 @@ a = Analysis(
     ['gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('static', 'static'), ('hotzone-admin.html', '.'), ('config.json', '.'), ('devices.json', '.'), ('vouchers.json', '.'), ('whitelist.json', '.'), ('voucher_codes.json', '.')],
+    datas=[('static', 'static'), ('hotzone-admin.html', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

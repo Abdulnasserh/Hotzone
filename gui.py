@@ -55,7 +55,7 @@ class ServerGUI(ctk.CTk):
         info_text = ctk.CTkLabel(frame, text="Please send this Machine ID to the seller:", font=ctk.CTkFont(size=14))
         info_text.pack(pady=(10, 5))
         
-        id_entry = ctk.CTkEntry(frame, width=350, height=35, font=ctk.CTkFont(size=15, weight="bold"), justify="center")
+        id_entry = ctk.CTkEntry(frame, width=420, height=35, font=ctk.CTkFont(size=14, weight="bold"), justify="center")
         id_entry.insert(0, machine_id)
         id_entry.configure(state="readonly")
         id_entry.pack(pady=5)
