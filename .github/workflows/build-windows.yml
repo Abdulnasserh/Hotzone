@@ -1,0 +1,47 @@
+name: Build Windows Application
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller customtkinter
+        
+    - name: Install Playwright Browsers
+      run: |
+        playwright install chromium
+        
+    - name: Build with PyInstaller
+      run: |
+        pyinstaller --noconfirm --onedir --windowed `
+          --name "HotZonePro" `
+          --add-data "static;static" `
+          --add-data "hotzone-admin.html;." `
+          --add-data "config.json;." `
+          --add-data "devices.json;." `
+          --add-data "vouchers.json;." `
+          --add-data "whitelist.json;." `
+          --add-data "voucher_codes.json;." `
+          gui.py
+          
+    - name: Upload Windows Executable
+      uses: actions/upload-artifact@v4
+      with:
+        name: HotZonePro-Windows
+        path: dist/HotZonePro/

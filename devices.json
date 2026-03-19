@@ -1,0 +1,28 @@
+[
+  {
+    "mac": "0E:E7:14:46:8A:D3",
+    "hostname": "Abdulnasser-s-A04e",
+    "ip": "192.168.1.138",
+    "status": "active",
+    "first_seen": "2026-03-19T17:41:27.908600",
+    "last_seen": "2026-03-20T00:04:56.849663",
+    "voucher_id": "cfab2750",
+    "expires": "2026-03-20T08:55:27.670846"
+  },
+  {
+    "mac": "D0:B1:28:FD:9A:43",
+    "hostname": "Galaxy-J5",
+    "ip": "192.168.1.152",
+    "status": "unknown",
+    "first_seen": "2026-03-19T17:41:27.908600",
+    "last_seen": "2026-03-19T17:45:53.370289"
+  },
+  {
+    "mac": "DC:29:19:46:1F:27",
+    "hostname": "android-a3a319b121e5156b",
+    "ip": "192.168.1.145",
+    "status": "unknown",
+    "first_seen": "2026-03-19T17:41:43.242061",
+    "last_seen": "2026-03-19T17:44:24.536286"
+  }
+]

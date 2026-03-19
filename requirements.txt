@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+playwright
+websockets
+httpx
+qrcode[pil]
