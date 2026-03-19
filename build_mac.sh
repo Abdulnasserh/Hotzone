@@ -30,6 +30,7 @@ DEST_BROWSERS="playwright/driver/package/.local-browsers/$HEADLESS_NAME"
 echo "📦 Compiling HotZone Pro Application for Mac..."
 pyinstaller --noconfirm --onedir --windowed \
     --name "HotZonePro" \
+    --icon="hotzone.icns" \
     --add-data "static:static" \
     --add-data "hotzone-admin.html:." \
     --add-data "$PW_DRIVER:playwright/driver" \

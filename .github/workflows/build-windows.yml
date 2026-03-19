@@ -64,6 +64,7 @@ jobs:
         
         pyinstaller --noconfirm --onedir --windowed `
           --name "HotZonePro" `
+          --icon="hotzone.ico" `
           --add-data "static;static" `
           --add-data "hotzone-admin.html;." `
           --add-data "${pw_driver};playwright\driver" `
