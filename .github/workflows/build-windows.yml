@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
     
     steps:
     - uses: actions/checkout@v4
@@ -68,8 +70,24 @@ jobs:
           --add-data "${headless_dir};${dest_browsers}" `
           gui.py
           
-    - name: Upload Windows Executable
+    - name: Compile Windows Installer (Inno Setup)
+      uses: minicomp/iscc@v1
+      with:
+        script: installer.iss
+        
+    - name: Upload Installer to GitHub Releases
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: latest-build
+        name: 🚀 Latest Windows Installer
+        body: "Automatically generated Windows setup installer for HotZone Pro. Download and run `HotZonePro_Setup.exe` to install."
+        prerelease: true
+        files: Output/HotZonePro_Setup.exe
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Upload Installer as Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: HotZonePro-Windows
-        path: dist/HotZonePro/
+        name: HotZonePro-Setup
+        path: Output/HotZonePro_Setup.exe
