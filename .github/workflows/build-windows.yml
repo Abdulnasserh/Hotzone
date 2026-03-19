@@ -72,9 +72,9 @@ jobs:
           gui.py
           
     - name: Compile Windows Installer (Inno Setup)
-      uses: minicomp/iscc@v1
-      with:
-        script: installer.iss
+      shell: pwsh
+      run: |
+        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
         
     - name: Upload Installer to GitHub Releases
       uses: softprops/action-gh-release@v1
