@@ -23,7 +23,38 @@ Add Rule flow:
 import asyncio
 import json
 import logging
+import sys
+import os
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# When running as a frozen PyInstaller app, tell Playwright where to find
+# the bundled browser binaries. The build script copies them into
+# <_MEIPASS>/playwright/driver/package/.local-browsers/
+# Setting PLAYWRIGHT_BROWSERS_PATH=0 makes Playwright look inside its own
+# package directory (which we bundled), rather than ~/Library/Caches/.
+# ---------------------------------------------------------------------------
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+
+# ---------------------------------------------------------------------------
+# On Windows, prevent the black console window from appearing when
+# Playwright spawns its Node.js driver subprocess.
+# We monkey-patch subprocess.Popen to include CREATE_NO_WINDOW flag.
+# ---------------------------------------------------------------------------
+if sys.platform == "win32" and getattr(sys, 'frozen', False):
+    import subprocess
+    _original_popen = subprocess.Popen
+
+    class _SilentPopen(_original_popen):
+        def __init__(self, *args, **kwargs):
+            CREATE_NO_WINDOW = 0x08000000
+            creationflags = kwargs.get("creationflags", 0)
+            kwargs["creationflags"] = creationflags | CREATE_NO_WINDOW
+            super().__init__(*args, **kwargs)
+
+    subprocess.Popen = _SilentPopen
+
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
 logger = logging.getLogger("router_scraper")
@@ -142,8 +173,16 @@ async def _ensure_logged_in(page: Page, config: dict):
     """Re-login if session expired."""
     global _logged_in
     try:
-        current_url = page.url
-        if "login" in current_url.lower() or not _logged_in:
+        # Many routers use an SPA architecture where the URL remains 'login.html'
+        # even after a successful login. We must check for the actual login form.
+        needs_login = not _logged_in
+        
+        # Check if login form is actively shown on screen
+        username_input = page.locator('input#username, input[name="username"]').first
+        if await username_input.is_visible(timeout=500):
+            needs_login = True
+            
+        if needs_login:
             await _login(page, config)
     except Exception:
         await _login(page, config)
@@ -353,35 +392,40 @@ async def scrape_devices() -> list[dict]:
             dhcp_item = page.locator('.el-menu-item:has-text("DHCP Information")').first
             try:
                 if await dhcp_item.is_visible(timeout=3000):
-                    await dhcp_item.click()
+                    await dhcp_item.click(timeout=3000)
                     await page.wait_for_timeout(2000)
                     logger.info("Clicked DHCP Information sidebar item")
                 else:
                     # Fallback: expand System Status first, then click
                     sys_status = page.locator('.el-submenu__title:has-text("System Status")').first
                     if await sys_status.is_visible(timeout=2000):
-                        await sys_status.click()
+                        await sys_status.click(timeout=2000)
                         await page.wait_for_timeout(1000)
-                    await dhcp_item.click()
+                    await dhcp_item.click(timeout=3000)
                     await page.wait_for_timeout(2000)
             except Exception:
-                # Last resort: navigate by URL
+                # Last resort: navigate by URL hash directly
+                logger.info("Sidebar click failed, navigating via URL hash")
                 await page.goto(f"http://{router_ip}/index.html#DHCP_INFO", timeout=15000)
                 await page.wait_for_timeout(3000)
 
-            # Step 2: Click the "Device List" tab (changes hash to #DHCP_INFO#1)
+            # Step 2: Click the "Device List" tab (some routers have this, others don't)
             device_list_tab = page.locator('text="Device List"').first
             try:
-                if await device_list_tab.is_visible(timeout=3000):
-                    await device_list_tab.click()
+                if await device_list_tab.is_visible(timeout=2000):
+                    await device_list_tab.click(timeout=2000)
                     await page.wait_for_timeout(2000)
                     logger.info("Clicked Device List tab")
-                else:
-                    logger.warning("Device List tab not visible")
-            except Exception as e:
-                logger.warning(f"Could not click Device List tab: {e}")
+            except Exception:
+                pass
 
-            # Step 3: Parse the table (columns: No., Host, MAC Address, IP)
+            # Step 3: Wait for the table to populate, then parse
+            try:
+                # Max 5s wait for a table row to appear so we don't scrape empty prematurely
+                await page.wait_for_selector('table tr', timeout=5000)
+            except Exception:
+                logger.warning("No table found on DHCP page (timeout)")
+
             rows = await page.locator('table tr').all()
             for row in rows:
                 cells = await row.locator('td').all()

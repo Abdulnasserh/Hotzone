@@ -1,9 +1,27 @@
+import sys
+import os
+
+# ---------------------------------------------------------------------------
+# On Windows frozen builds, suppress ALL black console windows from spawned
+# subprocesses (Playwright Node.js driver, uvicorn workers, etc.)
+# This MUST run before importing anything that spawns subprocesses.
+# ---------------------------------------------------------------------------
+if sys.platform == "win32" and getattr(sys, 'frozen', False):
+    import subprocess
+    _original_popen_init = subprocess.Popen.__init__
+
+    def _silent_popen_init(self, *args, **kwargs):
+        CREATE_NO_WINDOW = 0x08000000
+        creationflags = kwargs.get("creationflags", 0)
+        kwargs["creationflags"] = creationflags | CREATE_NO_WINDOW
+        _original_popen_init(self, *args, **kwargs)
+
+    subprocess.Popen.__init__ = _silent_popen_init
+
 import customtkinter as ctk
 import tkinter.messagebox as messagebox
 import threading
 import uvicorn
-import sys
-import os
 import webbrowser
 import shutil
 from pathlib import Path

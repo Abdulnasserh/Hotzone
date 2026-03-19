@@ -27,12 +27,45 @@ jobs:
       run: |
         playwright install chromium
         
-    - name: Build with PyInstaller
+    - name: Resolve Playwright paths
+      id: pw_paths
+      shell: powershell
       run: |
+        # Get the Playwright driver directory
+        $pw_driver = python -c "import playwright, os; print(os.path.join(os.path.dirname(playwright.__file__), 'driver'))"
+        echo "PW_DRIVER=$pw_driver" >> $env:GITHUB_OUTPUT
+        
+        # Get the browser cache directory (Windows: %LOCALAPPDATA%\ms-playwright)
+        $browsers_cache = "$env:LOCALAPPDATA\ms-playwright"
+        $headless_dir = Get-ChildItem -Path $browsers_cache -Filter "chromium_headless_shell-*" -Directory | Select-Object -First 1
+        
+        if ($null -eq $headless_dir) {
+          Write-Error "Could not find chromium_headless_shell in $browsers_cache"
+          exit 1
+        }
+        
+        $headless_path = $headless_dir.FullName
+        $headless_name = $headless_dir.Name
+        
+        echo "HEADLESS_DIR=$headless_path" >> $env:GITHUB_OUTPUT
+        echo "HEADLESS_NAME=$headless_name" >> $env:GITHUB_OUTPUT
+        echo "Playwright driver: $pw_driver"
+        echo "Headless shell: $headless_path"
+        
+    - name: Build with PyInstaller
+      shell: powershell
+      run: |
+        $pw_driver = "${{ steps.pw_paths.outputs.PW_DRIVER }}"
+        $headless_dir = "${{ steps.pw_paths.outputs.HEADLESS_DIR }}"
+        $headless_name = "${{ steps.pw_paths.outputs.HEADLESS_NAME }}"
+        $dest_browsers = "playwright\driver\package\.local-browsers\$headless_name"
+        
         pyinstaller --noconfirm --onedir --windowed `
           --name "HotZonePro" `
           --add-data "static;static" `
           --add-data "hotzone-admin.html;." `
+          --add-data "${pw_driver};playwright\driver" `
+          --add-data "${headless_dir};${dest_browsers}" `
           gui.py
           
     - name: Upload Windows Executable
