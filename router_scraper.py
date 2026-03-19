@@ -40,9 +40,20 @@ _lock = asyncio.Lock()  # Prevents concurrent router operations
 
 
 def _load_config() -> dict:
-    cfg_path = Path(__file__).parent / "config.json"
-    with open(cfg_path, "r") as f:
-        return json.load(f)
+    import sys, os, sqlite3, json
+    if getattr(sys, 'frozen', False):
+        db_path = Path(os.path.dirname(sys.executable)) / "hotzone.db"
+    else:
+        db_path = Path(__file__).parent / "hotzone.db"
+        
+    try:
+        with sqlite3.connect(db_path, timeout=5.0) as conn:
+            row = conn.execute("SELECT data FROM records WHERE key='config'").fetchone()
+            if row:
+                return json.loads(row[0])
+    except Exception:
+        pass
+    return {}
 
 
 async def _ensure_browser():

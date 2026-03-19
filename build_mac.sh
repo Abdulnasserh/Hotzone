@@ -9,11 +9,6 @@ pyinstaller --noconfirm --onedir --windowed \
     --name "HotZonePro" \
     --add-data "static:static" \
     --add-data "hotzone-admin.html:." \
-    --add-data "config.json:." \
-    --add-data "devices.json:." \
-    --add-data "vouchers.json:." \
-    --add-data "whitelist.json:." \
-    --add-data "voucher_codes.json:." \
     gui.py
 
 echo "✅ Build complete! You can find the executable Mac App inside the 'dist' folder."

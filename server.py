@@ -41,54 +41,85 @@ logger = logging.getLogger("hotzone")
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-BASE = Path(__file__).parent
-CONFIG_PATH = BASE / "config.json"
-WHITELIST_PATH = BASE / "whitelist.json"
-VOUCHERS_PATH = BASE / "vouchers.json"
-DEVICES_PATH = BASE / "devices.json"
-STATIC_DIR = BASE / "static"
+import sys
+import os
+
+if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    BUNDLE_DIR = Path(sys._MEIPASS)
+    DATA_DIR = Path(os.path.dirname(sys.executable))
+else:
+    BUNDLE_DIR = Path(__file__).parent
+    DATA_DIR = Path(__file__).parent
+
+DB_PATH = DATA_DIR / "hotzone.db"
+STATIC_DIR = BUNDLE_DIR / "static"
+ADMIN_PAGE_PATH = BUNDLE_DIR / "hotzone-admin.html"
 
 # ---------------------------------------------------------------------------
-# JSON helpers
+# SQLite Relational Database Layer
 # ---------------------------------------------------------------------------
+import sqlite3
 
-def _read_json(path: Path) -> Any:
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        if path in (WHITELIST_PATH, VOUCHERS_PATH, DEVICES_PATH):
-            return []
-        return {}
-
-
-def _write_json(path: Path, data: Any):
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2, default=str)
-
+def _get_db():
+    conn = sqlite3.connect(DB_PATH, timeout=10.0)
+    conn.execute("PRAGMA journal_mode=WAL")
+    
+    # Initialize relational tables
+    conn.executescript('''
+    CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT);
+    CREATE TABLE IF NOT EXISTS whitelist (mac TEXT PRIMARY KEY, hostname TEXT, label TEXT);
+    CREATE TABLE IF NOT EXISTS vouchers (id TEXT PRIMARY KEY, reference TEXT, mac TEXT, hostname TEXT, ip TEXT, phone TEXT, amount INTEGER, currency TEXT, status TEXT, created TEXT, expires TEXT);
+    CREATE TABLE IF NOT EXISTS devices (mac TEXT PRIMARY KEY, hostname TEXT, ip TEXT, status TEXT, voucher_id TEXT, expires TEXT);
+    CREATE TABLE IF NOT EXISTS voucher_codes (code TEXT PRIMARY KEY, label TEXT, amount INTEGER, duration_hours INTEGER, status TEXT, created TEXT, used_by TEXT, used_at TEXT, qr_url TEXT);
+    ''')
+    return conn
 
 def get_config() -> dict:
-    return _read_json(CONFIG_PATH)
+    try:
+        with _get_db() as conn:
+            return {r[0]: r[1] for r in conn.execute("SELECT key, value FROM config").fetchall()}
+    except Exception:
+        return {}
 
+def _write_db(table: str, data: dict): 
+    # Legacy generic fallback for simple writes if needed
+    pass 
 
 def get_whitelist() -> list:
-    return _read_json(WHITELIST_PATH)
-
+    try:
+        with _get_db() as conn:
+            return [{"mac": r[0], "hostname": r[1], "label": r[2]} for r in conn.execute("SELECT mac, hostname, label FROM whitelist").fetchall()]
+    except Exception: return []
 
 def get_vouchers() -> list:
-    return _read_json(VOUCHERS_PATH)
+    try:
+        with _get_db() as conn:
+            return [{"id":r[0],"reference":r[1],"mac":r[2],"hostname":r[3],"ip":r[4],"phone":r[5],"amount":r[6],"currency":r[7],"status":r[8],"created":r[9],"expires":r[10]} 
+                    for r in conn.execute("SELECT id,reference,mac,hostname,ip,phone,amount,currency,status,created,expires FROM vouchers").fetchall()]
+    except Exception: return []
 
-
-def save_vouchers(vouchers: list):
-    _write_json(VOUCHERS_PATH, vouchers)
-
+def save_vouchers(vlist: list):
+    try:
+        with _get_db() as conn:
+            conn.execute("DELETE FROM vouchers")
+            conn.executemany("INSERT INTO vouchers (id,reference,mac,hostname,ip,phone,amount,currency,status,created,expires) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                             [(i.get("id"),i.get("reference"),i.get("mac"),i.get("hostname"),i.get("ip"),i.get("phone"),i.get("amount"),i.get("currency"),i.get("status"),i.get("created"),i.get("expires")) for i in vlist])
+    except Exception: pass
 
 def get_devices_store() -> list:
-    return _read_json(DEVICES_PATH)
+    try:
+        with _get_db() as conn:
+            return [{"mac":r[0],"hostname":r[1],"ip":r[2],"status":r[3],"voucher_id":r[4],"expires":r[5]} 
+                    for r in conn.execute("SELECT mac,hostname,ip,status,voucher_id,expires FROM devices").fetchall()]
+    except Exception: return []
 
-
-def save_devices_store(devices: list):
-    _write_json(DEVICES_PATH, devices)
+def save_devices_store(dlist: list):
+    try:
+        with _get_db() as conn:
+            conn.execute("DELETE FROM devices")
+            conn.executemany("INSERT INTO devices (mac,hostname,ip,status,voucher_id,expires) VALUES (?,?,?,?,?,?)",
+                             [(i.get("mac"),i.get("hostname"),i.get("ip"),i.get("status"),i.get("voucher_id"),i.get("expires")) for i in dlist])
+    except Exception: pass
 
 # ---------------------------------------------------------------------------
 # Lifespan
@@ -193,9 +224,8 @@ async def serve_customer_page():
 
 @app.get("/admin", response_class=HTMLResponse)
 async def serve_admin_page():
-    admin = BASE / "hotzone-admin.html"
-    if admin.exists():
-        return FileResponse(str(admin))
+    if ADMIN_PAGE_PATH.exists():
+        return FileResponse(str(ADMIN_PAGE_PATH))
     return HTMLResponse("<h1>Admin page not found</h1>", status_code=404)
 
 
@@ -351,12 +381,22 @@ async def add_whitelist(entry: WhitelistEntry):
         if w["mac"].upper() == entry.mac.upper():
             w["hostname"] = entry.hostname
             w["label"] = entry.label
-            _write_json(WHITELIST_PATH, wl)
+            try:
+                with _get_db() as conn:
+                    conn.execute("DELETE FROM whitelist")
+                    conn.executemany("INSERT INTO whitelist (mac, hostname, label) VALUES (?, ?, ?)", 
+                             [(i.get("mac",""), i.get("hostname",""), i.get("label","")) for i in wl])
+            except Exception: pass
             return {"status": "updated", "entry": w}
 
     new_entry = {"mac": entry.mac.upper(), "hostname": entry.hostname, "label": entry.label}
     wl.append(new_entry)
-    _write_json(WHITELIST_PATH, wl)
+    try:
+        with _get_db() as conn:
+            conn.execute("DELETE FROM whitelist")
+            conn.executemany("INSERT INTO whitelist (mac, hostname, label) VALUES (?, ?, ?)", 
+                             [(i.get("mac",""), i.get("hostname",""), i.get("label","")) for i in wl])
+    except Exception: pass
     await ws_manager.broadcast({"type": "whitelist_updated", "whitelist": wl})
     return {"status": "added", "entry": new_entry}
 
@@ -365,7 +405,12 @@ async def add_whitelist(entry: WhitelistEntry):
 async def remove_whitelist(mac: str):
     wl = get_whitelist()
     wl = [w for w in wl if w["mac"].upper() != mac.upper()]
-    _write_json(WHITELIST_PATH, wl)
+    try:
+        with _get_db() as conn:
+            conn.execute("DELETE FROM whitelist")
+            conn.executemany("INSERT INTO whitelist (mac, hostname, label) VALUES (?, ?, ?)", 
+                             [(i.get("mac",""), i.get("hostname",""), i.get("label","")) for i in wl])
+    except Exception: pass
     # Also block on the router
     asyncio.create_task(block_device(mac))
     await ws_manager.broadcast({"type": "whitelist_updated", "whitelist": wl})
@@ -392,7 +437,11 @@ async def update_config(update: ConfigUpdate):
     config = get_config()
     for key, val in update.dict(exclude_none=True).items():
         config[key] = val
-    _write_json(CONFIG_PATH, config)
+    try:
+        with _get_db() as conn:
+            conn.execute("DELETE FROM config")
+            conn.executemany("INSERT INTO config (key, value) VALUES (?, ?)", [(k, str(v)) for k, v in config.items()])
+    except Exception: pass
     await ws_manager.broadcast({"type": "config_updated"})
     return {"status": "ok"}
 
@@ -523,13 +572,22 @@ def _generate_qr(data: str) -> io.BytesIO:
 # Routes — Voucher Codes (admin creates codes for scan-to-pay)
 # ---------------------------------------------------------------------------
 
-VOUCHER_CODES_PATH = BASE / "voucher_codes.json"
+
 
 def get_voucher_codes() -> list:
-    return _read_json(VOUCHER_CODES_PATH)
+    try:
+        with _get_db() as conn:
+            rows = conn.execute("SELECT code, label, amount, duration_hours, status, created, used_by, used_at, qr_url FROM voucher_codes").fetchall()
+            return [{"code":r[0], "label":r[1], "amount":r[2], "duration_hours":r[3], "status":r[4], "created":r[5], "used_by":r[6], "used_at":r[7], "qr_url":r[8]} for r in rows]
+    except Exception: return []
 
-def save_voucher_codes(codes: list):
-    _write_json(VOUCHER_CODES_PATH, codes)
+def save_voucher_codes(clist: list):
+    try:
+        with _get_db() as conn:
+            conn.execute("DELETE FROM voucher_codes")
+            conn.executemany("INSERT INTO voucher_codes (code, label, amount, duration_hours, status, created, used_by, used_at, qr_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             [(i.get("code"), i.get("label"), i.get("amount"), i.get("duration_hours"), i.get("status"), i.get("created"), i.get("used_by"), i.get("used_at"), i.get("qr_url")) for i in clist])
+    except Exception: pass
 
 
 class VoucherCodeCreate(BaseModel):

@@ -1,21 +1,26 @@
-import tkinter as tk
-from tkinter import messagebox, font
+import customtkinter as ctk
+import tkinter.messagebox as messagebox
 import threading
 import uvicorn
 import sys
 import os
+import webbrowser
+import shutil
+from pathlib import Path
 from license_manager import get_machine_id, verify_key
 
 LICENSE_FILE = "license.key"
 
-class ServerGUI(tk.Tk):
+# Configure modern appearance
+ctk.set_appearance_mode("System")  # Modes: "System" (standard), "Dark", "Light"
+ctk.set_default_color_theme("blue")  # Themes: "blue" (standard), "green", "dark-blue"
+
+class ServerGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("HotZone Pro Edition - Server Dashboard")
-        self.geometry("450x330")
-        self.config(bg="#f4f6f8")
-
-        self.custom_font = font.Font(family="Helvetica", size=12)
+        self.geometry("500x420")
+        self.resizable(False, False)
 
         self.server_thread = None
         self.server_instance = None
@@ -32,24 +37,37 @@ class ServerGUI(tk.Tk):
                 return verify_key(key)
         return False
 
+    def clear_window(self):
+        for widget in self.winfo_children():
+            widget.destroy()
+
     def show_registration(self):
         self.clear_window()
         
-        tk.Label(self, text="🔑 Software Registration", font=("Helvetica", 16, "bold"), bg="#f4f6f8").pack(pady=10)
+        # Rounded Container Frame
+        frame = ctk.CTkFrame(self, corner_radius=15)
+        frame.pack(pady=20, padx=20, fill="both", expand=True)
+
+        label_title = ctk.CTkLabel(frame, text="🔑 Software Registration", font=ctk.CTkFont(size=22, weight="bold"))
+        label_title.pack(pady=(25, 10))
         
         machine_id = get_machine_id()
-        tk.Label(self, text="Please send this Machine ID to the seller:", bg="#f4f6f8").pack()
+        info_text = ctk.CTkLabel(frame, text="Please send this Machine ID to the seller:", font=ctk.CTkFont(size=14))
+        info_text.pack(pady=(10, 5))
         
-        id_entry = tk.Entry(self, width=40, font=self.custom_font, justify="center")
+        id_entry = ctk.CTkEntry(frame, width=350, height=35, font=ctk.CTkFont(size=15, weight="bold"), justify="center")
         id_entry.insert(0, machine_id)
-        id_entry.config(state="readonly")
+        id_entry.configure(state="readonly")
         id_entry.pack(pady=5)
 
-        tk.Label(self, text="Enter your License Key below:", bg="#f4f6f8").pack(pady=10)
-        self.key_entry = tk.Entry(self, width=30, font=self.custom_font, justify="center")
+        key_text = ctk.CTkLabel(frame, text="Enter your License Key below:", font=ctk.CTkFont(size=14))
+        key_text.pack(pady=(20, 5))
+        
+        self.key_entry = ctk.CTkEntry(frame, width=320, height=40, font=ctk.CTkFont(size=15), justify="center", placeholder_text="Enter 16-character license key")
         self.key_entry.pack(pady=5)
 
-        tk.Button(self, text="Activate Software", fg="black", font=self.custom_font, command=self.activate).pack(pady=20)
+        activate_btn = ctk.CTkButton(frame, text="Activate Software", font=ctk.CTkFont(size=15, weight="bold"), height=45, fg_color="#10B981", hover_color="#059669", command=self.activate)
+        activate_btn.pack(pady=(25, 15))
 
     def activate(self):
         key = self.key_entry.get().strip()
@@ -63,42 +81,73 @@ class ServerGUI(tk.Tk):
 
     def show_dashboard(self):
         self.clear_window()
-        tk.Label(self, text="🌐 HotZone WiFi Control Panel", font=("Helvetica", 18, "bold"), bg="#f4f6f8").pack(pady=20)
-
-        self.status_label = tk.Label(self, text="Server Status: OFFLINE", fg="red", font=("Helvetica", 14), bg="#f4f6f8")
-        self.status_label.pack(pady=10)
-
-        self.start_btn = tk.Button(self, text="▶ Start Server", fg="black", font=self.custom_font, width=15, command=self.start_server)
-        self.start_btn.pack(pady=5)
-
-        self.stop_btn = tk.Button(self, text="⏹ Stop Server", fg="black", font=self.custom_font, width=15, state="disabled", command=self.stop_server)
-        self.stop_btn.pack(pady=5)
         
-        tk.Label(self, text="Running locally on port 8000", fg="#888", bg="#f4f6f8").pack(pady=20)
+        frame = ctk.CTkFrame(self, corner_radius=15)
+        frame.pack(pady=20, padx=20, fill="both", expand=True)
 
-    def clear_window(self):
-        for widget in self.winfo_children():
-            widget.destroy()
+        title = ctk.CTkLabel(frame, text="🌐 HotZone WiFi Control Panel", font=ctk.CTkFont(size=24, weight="bold"))
+        title.pack(pady=(25, 15))
+
+        self.status_label = ctk.CTkLabel(frame, text="Server Status: OFFLINE", text_color="#EF4444", font=ctk.CTkFont(size=18, weight="bold"))
+        self.status_label.pack(pady=15)
+
+        self.start_btn = ctk.CTkButton(frame, text="▶ Start Server", fg_color="#10B981", hover_color="#059669", font=ctk.CTkFont(size=16, weight="bold"), height=50, command=self.start_server)
+        self.start_btn.pack(pady=(20, 10))
+
+        self.stop_btn = ctk.CTkButton(frame, text="⏹ Stop Server", fg_color="#EF4444", hover_color="#DC2626", font=ctk.CTkFont(size=16, weight="bold"), height=50, state="disabled", command=self.stop_server)
+        self.stop_btn.pack(pady=10)
+        
+        self.admin_btn = ctk.CTkButton(frame, text="⚙️ Open Admin Portal", fg_color="#3B82F6", hover_color="#2563EB", font=ctk.CTkFont(size=14, weight="bold"), height=40, state="disabled", command=self.open_admin)
+        self.admin_btn.pack(pady=(5, 10))
+
+        self.import_btn = ctk.CTkButton(frame, text="📂 Import Database Backup", fg_color="#8B5CF6", hover_color="#7C3AED", font=ctk.CTkFont(size=13, weight="bold"), height=35, command=self.import_database)
+        self.import_btn.pack(pady=(5, 10))
+        
+        info = ctk.CTkLabel(frame, text="Customers will connect via Local WiFi Router", font=ctk.CTkFont(size=13), text_color="gray")
+        info.pack(pady=(10, 10))
+
+    def import_database(self):
+        file_path = ctk.filedialog.askopenfilename(
+            title="Select hotzone.db Backup File",
+            filetypes=[("SQLite Database", "*.db"), ("All Files", "*.*")]
+        )
+        if file_path:
+            try:
+                if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+                    target_dir = Path(os.path.dirname(sys.executable))
+                else:
+                    target_dir = Path(__file__).parent
+                
+                shutil.copy2(file_path, target_dir / "hotzone.db")
+                messagebox.showinfo("Success", "Backup successfully imported! Settings and Vouchers restored.")
+            except Exception as e:
+                messagebox.showerror("Import Error", f"Failed to import database: {e}")
+
+    def open_admin(self):
+        webbrowser.open("http://127.0.0.1:8000/admin")
 
     def run_uvicorn(self):
-        # Import the FASTAPI app inside the thread to avoid blocking GUI init
         from server import app
         config = uvicorn.Config(app=app, host="0.0.0.0", port=8000, log_level="info")
         self.server_instance = uvicorn.Server(config=config)
         self.server_instance.run()
 
     def start_server(self):
-        self.start_btn.config(state="disabled")
-        self.stop_btn.config(state="normal")
-        self.status_label.config(text="Server Status: RUNNING", fg="green")
+        self.start_btn.configure(state="disabled")
+        self.stop_btn.configure(state="normal")
+        self.admin_btn.configure(state="normal")
+        self.import_btn.configure(state="disabled")
+        self.status_label.configure(text="Server Status: RUNNING", text_color="#10B981")
         
         self.server_thread = threading.Thread(target=self.run_uvicorn, daemon=True)
         self.server_thread.start()
 
     def stop_server(self):
-        self.start_btn.config(state="normal")
-        self.stop_btn.config(state="disabled")
-        self.status_label.config(text="Server Status: OFFLINE", fg="red")
+        self.start_btn.configure(state="normal")
+        self.stop_btn.configure(state="disabled")
+        self.admin_btn.configure(state="disabled")
+        self.import_btn.configure(state="normal")
+        self.status_label.configure(text="Server Status: OFFLINE", text_color="#EF4444")
         
         if self.server_instance:
             self.server_instance.should_exit = True
