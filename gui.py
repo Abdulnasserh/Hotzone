@@ -18,6 +18,15 @@ if sys.platform == "win32" and getattr(sys, 'frozen', False):
 
     subprocess.Popen.__init__ = _silent_popen_init
 
+    # CRITICAL: Prevent OSError due to missing stdout/stderr in --windowed mode
+    try:
+        if sys.stdout is None or sys.stderr is None:
+            devnull = open(os.devnull, 'w')
+            sys.stdout = sys.stdout or devnull
+            sys.stderr = sys.stderr or devnull
+    except Exception:
+        pass
+
 import customtkinter as ctk
 import tkinter.messagebox as messagebox
 import threading
@@ -155,10 +164,16 @@ class ServerGUI(ctk.CTk):
         webbrowser.open("http://127.0.0.1:8000/admin")
 
     def run_uvicorn(self):
-        from server import app
-        config = uvicorn.Config(app=app, host="0.0.0.0", port=8000, log_level="info")
-        self.server_instance = uvicorn.Server(config=config)
-        self.server_instance.run()
+        try:
+            from server import app
+            config = uvicorn.Config(app=app, host="0.0.0.0", port=8000, log_level="info")
+            self.server_instance = uvicorn.Server(config=config)
+            self.server_instance.run()
+        except Exception as e:
+            def show_error():
+                messagebox.showerror("Server Crash", f"The server failed to start:\n\n{str(e)}\n\n(It may be blocked by a Firewall, Port 8000 is used, or data is inaccessible)")
+                self.stop_server()
+            self.after(0, show_error)
 
     def start_server(self):
         self.start_btn.configure(state="disabled")
