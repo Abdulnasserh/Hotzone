@@ -25,9 +25,21 @@ import uvicorn
 import webbrowser
 import shutil
 from pathlib import Path
+import platform
 from license_manager import get_machine_id, verify_key
 
-LICENSE_FILE = "license.key"
+def get_data_dir():
+    if getattr(sys, 'frozen', False):
+        if platform.system() == "Windows":
+            d = Path(os.environ.get("APPDATA", os.path.expanduser("~"))) / "HotZonePro"
+        else:
+            d = Path(os.path.expanduser("~")) / ".HotZonePro"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    return Path(__file__).parent
+
+DATA_DIR = get_data_dir()
+LICENSE_FILE = DATA_DIR / "license.key"
 
 # Configure modern appearance
 ctk.set_appearance_mode("System")  # Modes: "System" (standard), "Dark", "Light"
@@ -90,10 +102,13 @@ class ServerGUI(ctk.CTk):
     def activate(self):
         key = self.key_entry.get().strip()
         if verify_key(key):
-            with open(LICENSE_FILE, "w") as f:
-                f.write(key)
-            messagebox.showinfo("Success", "Software activated successfully! Thank you for purchasing.")
-            self.show_dashboard()
+            try:
+                with open(LICENSE_FILE, "w") as f:
+                    f.write(key)
+                messagebox.showinfo("Success", "Software activated successfully! Thank you for purchasing.")
+                self.show_dashboard()
+            except Exception as e:
+                messagebox.showerror("Permission Error", f"Failed to save license locally: {e}\nPlease run the app as Administrator or contact support.")
         else:
             messagebox.showerror("Error", "Invalid License Key!")
 
@@ -131,12 +146,7 @@ class ServerGUI(ctk.CTk):
         )
         if file_path:
             try:
-                if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-                    target_dir = Path(os.path.dirname(sys.executable))
-                else:
-                    target_dir = Path(__file__).parent
-                
-                shutil.copy2(file_path, target_dir / "hotzone.db")
+                shutil.copy2(file_path, DATA_DIR / "hotzone.db")
                 messagebox.showinfo("Success", "Backup successfully imported! Settings and Vouchers restored.")
             except Exception as e:
                 messagebox.showerror("Import Error", f"Failed to import database: {e}")

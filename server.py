@@ -37,8 +37,13 @@ import os
 # Paths
 # ---------------------------------------------------------------------------
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+    import platform
     BUNDLE_DIR = Path(sys._MEIPASS)
-    DATA_DIR = Path(os.path.dirname(sys.executable))
+    if platform.system() == "Windows":
+        DATA_DIR = Path(os.environ.get("APPDATA", os.path.expanduser("~"))) / "HotZonePro"
+    else:
+        DATA_DIR = Path(os.path.expanduser("~")) / ".HotZonePro"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
 else:
     BUNDLE_DIR = Path(__file__).parent
     DATA_DIR = Path(__file__).parent
