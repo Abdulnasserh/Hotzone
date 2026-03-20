@@ -29,13 +29,41 @@ from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # When running as a frozen PyInstaller app, tell Playwright where to find
-# the bundled browser binaries. The build script copies them into
-# <_MEIPASS>/playwright/driver/package/.local-browsers/
-# Setting PLAYWRIGHT_BROWSERS_PATH=0 makes Playwright look inside its own
-# package directory (which we bundled), rather than ~/Library/Caches/.
+# the bundled browser binaries.  We set PLAYWRIGHT_BROWSERS_PATH to the
+# explicit .local-browsers directory we bundled, AND we discover the
+# chrome executable ourselves so we can pass it as executable_path.
 # ---------------------------------------------------------------------------
+_frozen_chrome_exe = None   # Will be set if we find a bundled chrome binary
+
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+    _local_browsers = os.path.join(
+        sys._MEIPASS, "playwright", "driver", "package", ".local-browsers"
+    )
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = _local_browsers
+
+    # --- Discover chrome executable explicitly ---
+    # Playwright installs chromium-XXXX/ (full) and
+    # chromium-headless-shell-XXXX/ (headless).  We prefer the full one.
+    if os.path.isdir(_local_browsers):
+        for entry in sorted(os.listdir(_local_browsers)):
+            entry_path = os.path.join(_local_browsers, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            # Look for chrome.exe / headless_shell.exe inside
+            candidates = [
+                os.path.join(entry_path, "chrome-win", "chrome.exe"),
+                os.path.join(entry_path, "chrome-win", "headless_shell.exe"),
+                os.path.join(entry_path, "chrome-linux", "chrome"),
+                os.path.join(entry_path, "chrome-linux", "headless_shell"),
+                os.path.join(entry_path, "chrome-mac", "Chromium.app",
+                             "Contents", "MacOS", "Chromium"),
+            ]
+            for c in candidates:
+                if os.path.isfile(c):
+                    _frozen_chrome_exe = c
+                    break
+            if _frozen_chrome_exe:
+                break
 
 # ---------------------------------------------------------------------------
 # On Windows, prevent the black console window from appearing when
@@ -71,9 +99,14 @@ _lock = asyncio.Lock()  # Prevents concurrent router operations
 
 
 def _load_config() -> dict:
-    import sys, os, sqlite3, json
+    import sys, os, sqlite3, json, platform
     if getattr(sys, 'frozen', False):
-        db_path = Path(os.path.dirname(sys.executable)) / "hotzone.db"
+        # Must match server.py DATA_DIR logic
+        if platform.system() == "Windows":
+            data_dir = Path(os.environ.get("APPDATA", os.path.expanduser("~"))) / "HotZonePro"
+        else:
+            data_dir = Path(os.path.expanduser("~")) / ".HotZonePro"
+        db_path = data_dir / "hotzone.db"
     else:
         db_path = Path(__file__).parent / "hotzone.db"
         
@@ -93,7 +126,8 @@ async def _ensure_browser():
     global _playwright, _browser, _context, _page, _logged_in
     if _browser is None or not _browser.is_connected():
         _playwright = await async_playwright().start()
-        _browser = await _playwright.chromium.launch(
+
+        launch_kwargs = dict(
             headless=True,
             args=[
                 "--disable-gpu",
@@ -107,8 +141,36 @@ async def _ensure_browser():
                 "--metrics-recording-only",
                 "--mute-audio",
                 "--no-first-run",
-            ]
+            ],
         )
+
+        # For frozen builds, pass the explicit path so Playwright doesn't
+        # have to discover the browser itself (which often fails in
+        # PyInstaller bundles).
+        if _frozen_chrome_exe:
+            launch_kwargs["executable_path"] = _frozen_chrome_exe
+            logger.info(f"Using bundled browser: {_frozen_chrome_exe}")
+
+        try:
+            _browser = await _playwright.chromium.launch(**launch_kwargs)
+        except Exception as e:
+            logger.error(f"Chromium launch failed: {e}")
+            # Log diagnostic info for debugging
+            if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+                _lb = os.path.join(
+                    sys._MEIPASS, "playwright", "driver", "package", ".local-browsers"
+                )
+                if os.path.isdir(_lb):
+                    logger.error(f"  .local-browsers contents: {os.listdir(_lb)}")
+                    for d in os.listdir(_lb):
+                        dp = os.path.join(_lb, d)
+                        if os.path.isdir(dp):
+                            logger.error(f"    {d}/ contents: {os.listdir(dp)[:10]}")
+                else:
+                    logger.error(f"  .local-browsers dir NOT found at: {_lb}")
+                logger.error(f"  _frozen_chrome_exe = {_frozen_chrome_exe}")
+            raise
+
         _context = await _browser.new_context(ignore_https_errors=True)
         _page = await _context.new_page()
         _logged_in = False
