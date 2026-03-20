@@ -424,12 +424,26 @@ function btnLoading(btn,loading,origText){
   else{btn.classList.remove('loading');}
 }
 
+// --- Retry helper: retries fetch until server is ready (handles slow Windows startup) ---
+async function fetchRetry(url, options, retries=8, delay=3000){
+  for(let i=0;i<retries;i++){
+    try{
+      const r=await fetch(url,options);
+      if(r.ok)return r;
+      throw new Error('HTTP '+r.status);
+    }catch(e){
+      if(i===retries-1)throw e;
+      await new Promise(ok=>setTimeout(ok,delay));
+    }
+  }
+}
+
 // Dashboard
 async function loadDashboard(){
   const tb=document.getElementById('dashVouchers');
   tb.innerHTML='<tr class="table-loading"><td colspan="6" style="text-align:center;padding:24px;color:var(--td)"><span style="display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;margin-right:8px"></span>Loading dashboard...</td></tr>';
   try{
-    const[rev,vouchers]=await Promise.all([fetch(API+'/api/revenue').then(r=>r.json()),fetch(API+'/api/vouchers').then(r=>r.json())]);
+    const[rev,vouchers]=await Promise.all([fetchRetry(API+'/api/revenue').then(r=>r.json()),fetchRetry(API+'/api/vouchers').then(r=>r.json())]);
     document.getElementById('revToday').textContent=fmtCurrency(rev.today);
     document.getElementById('revAll').textContent=fmtCurrency(rev.all_time);
     document.getElementById('activeCount').textContent=rev.active_count;
@@ -446,7 +460,7 @@ async function refreshDevices(){
   const tb=document.getElementById('devicesTable');
   tb.innerHTML='<tr class="table-loading"><td colspan="6" style="text-align:center;padding:24px;color:var(--td)"><span style="display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;margin-right:8px"></span>Inatafuta vifaa kwenye router...</td></tr>';
   try{
-    const devs=await fetch(API+'/api/devices').then(r=>r.json());
+    const devs=await fetchRetry(API+'/api/devices').then(r=>r.json());
     document.getElementById('deviceCount').textContent=devs.length;
     if(!devs.length){tb.innerHTML='<tr><td colspan="6" class="empty">Hakuna vifaa vilivyopatikana</td></tr>';return;}
     tb.innerHTML=devs.map(d=>`<tr>
@@ -485,7 +499,7 @@ async function loadVouchers(){
   const tb=document.getElementById('vouchersTable');
   tb.innerHTML='<tr class="table-loading"><td colspan="8" style="text-align:center;padding:24px;color:var(--td)"><span style="display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;margin-right:8px"></span>Inapakia vouchers...</td></tr>';
   try{
-    const vouchers=await fetch(API+'/api/vouchers').then(r=>r.json());
+    const vouchers=await fetchRetry(API+'/api/vouchers').then(r=>r.json());
     if(!vouchers.length){tb.innerHTML='<tr><td colspan="8" class="empty">Hakuna vouchers</td></tr>';return;}
     tb.innerHTML=vouchers.slice().reverse().map(v=>`<tr>
       <td>${v.id}</td><td>${v.phone||'—'}</td><td style="font-size:11px">${v.mac}</td><td>${v.hostname||'—'}</td>
@@ -500,7 +514,7 @@ async function loadWhitelist(){
   const tb=document.getElementById('whitelistTable');
   tb.innerHTML='<tr class="table-loading"><td colspan="4" style="text-align:center;padding:24px;color:var(--td)"><span style="display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;margin-right:8px"></span>Inapakia whitelist...</td></tr>';
   try{
-    const wl=await fetch(API+'/api/whitelist').then(r=>r.json());
+    const wl=await fetchRetry(API+'/api/whitelist').then(r=>r.json());
     if(!wl.length){tb.innerHTML='<tr><td colspan="4" class="empty">Hakuna vifaa kwenye whitelist</td></tr>';return;}
     tb.innerHTML=wl.map(w=>`<tr><td style="font-size:11px">${w.mac}</td><td>${w.hostname}</td><td>${w.label||'—'}</td>
       <td><button class="btn sm danger" onclick="removeWl('${w.mac}',this)">🗑️ Ondoa</button></td></tr>`).join('');
@@ -536,7 +550,7 @@ async function removeWl(mac,btn){
 // Settings
 async function loadSettings(){
   try{
-    const c=await fetch(API+'/api/config/raw').then(r=>r.json());
+    const c=await fetchRetry(API+'/api/config/raw').then(r=>r.json());
     document.getElementById('cfgRouterIp').value=c.routerIp||'';
     document.getElementById('cfgRouterUser').value=c.routerUser||'';
     document.getElementById('cfgRouterPass').value=c.routerPass||'';
