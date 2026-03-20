@@ -13,6 +13,7 @@ import hmac
 import io
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -27,23 +28,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from router_scraper import scrape_devices, block_device, unblock_device, sync_whitelist_to_router, cleanup as pw_cleanup
+from router_scraper import scrape_devices, block_device, unblock_device, sync_whitelist_to_router, purge_unauthorized_macs, cleanup as pw_cleanup
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s"
-)
-logger = logging.getLogger("hotzone")
+import sys
+import os
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-import sys
-import os
-
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     BUNDLE_DIR = Path(sys._MEIPASS)
     DATA_DIR = Path(os.path.dirname(sys.executable))
@@ -56,23 +48,40 @@ STATIC_DIR = BUNDLE_DIR / "static"
 ADMIN_PAGE_PATH = BUNDLE_DIR / "hotzone-admin.html"
 
 # ---------------------------------------------------------------------------
+# Logging (Production Ready)
+# ---------------------------------------------------------------------------
+log_formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+log_handler = RotatingFileHandler(DATA_DIR / "hotzone.log", maxBytes=10*1024*1024, backupCount=5)
+log_handler.setFormatter(log_formatter)
+
+logging.basicConfig(level=logging.INFO, handlers=[log_handler, logging.StreamHandler(sys.stdout)])
+logger = logging.getLogger("hotzone")
+
+# ---------------------------------------------------------------------------
 # SQLite Relational Database Layer
 # ---------------------------------------------------------------------------
 import sqlite3
+import threading
+
+_db_local = threading.local()
 
 def _get_db():
-    conn = sqlite3.connect(DB_PATH, timeout=10.0)
-    conn.execute("PRAGMA journal_mode=WAL")
-    
-    # Initialize relational tables
-    conn.executescript('''
-    CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT);
-    CREATE TABLE IF NOT EXISTS whitelist (mac TEXT PRIMARY KEY, hostname TEXT, label TEXT);
-    CREATE TABLE IF NOT EXISTS vouchers (id TEXT PRIMARY KEY, reference TEXT, mac TEXT, hostname TEXT, ip TEXT, phone TEXT, amount INTEGER, currency TEXT, status TEXT, created TEXT, expires TEXT);
-    CREATE TABLE IF NOT EXISTS devices (mac TEXT PRIMARY KEY, hostname TEXT, ip TEXT, status TEXT, voucher_id TEXT, expires TEXT);
-    CREATE TABLE IF NOT EXISTS voucher_codes (code TEXT PRIMARY KEY, label TEXT, amount INTEGER, duration_hours INTEGER, status TEXT, created TEXT, used_by TEXT, used_at TEXT, qr_url TEXT);
-    ''')
-    return conn
+    if not hasattr(_db_local, "conn"):
+        _db_local.conn = sqlite3.connect(DB_PATH, timeout=20.0, check_same_thread=False)
+        _db_local.conn.execute("PRAGMA journal_mode=WAL")
+        _db_local.conn.execute("PRAGMA synchronous=NORMAL")
+        _db_local.conn.execute("PRAGMA temp_store=MEMORY")
+        _db_local.conn.execute("PRAGMA cache_size=-64000")
+        
+        # Initialize relational tables
+        _db_local.conn.executescript('''
+        CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE IF NOT EXISTS whitelist (mac TEXT PRIMARY KEY, hostname TEXT, label TEXT);
+        CREATE TABLE IF NOT EXISTS vouchers (id TEXT PRIMARY KEY, reference TEXT, mac TEXT, hostname TEXT, ip TEXT, phone TEXT, amount INTEGER, currency TEXT, status TEXT, created TEXT, expires TEXT);
+        CREATE TABLE IF NOT EXISTS devices (mac TEXT PRIMARY KEY, hostname TEXT, ip TEXT, status TEXT, voucher_id TEXT, expires TEXT);
+        CREATE TABLE IF NOT EXISTS voucher_codes (code TEXT PRIMARY KEY, label TEXT, amount INTEGER, duration_hours INTEGER, status TEXT, created TEXT, used_by TEXT, used_at TEXT, qr_url TEXT);
+        ''')
+    return _db_local.conn
 
 def get_config() -> dict:
     try:
@@ -128,23 +137,59 @@ def save_devices_store(dlist: list):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("🔥 HotZone WiFi Voucher Server starting...")
-    
-    # Sync whitelist to router at startup (sequential, one session)
-    whitelist = get_whitelist()
-    if whitelist:
-        logger.info(f"Syncing {len(whitelist)} whitelisted devices to router...")
-        asyncio.create_task(sync_whitelist_to_router(whitelist))
+
+    # Build the set of MACs that are legitimately allowed on the router:
+    # permanent whitelist + active (non-expired) vouchers
+    async def _startup_reconcile():
+        whitelist = get_whitelist()
+        wl_macs = {w["mac"].upper() for w in whitelist}
+
+        now = datetime.now()
+        vouchers = get_vouchers()
+        active_voucher_macs = {
+            v["mac"].upper() for v in vouchers
+            if v.get("status") == "active"
+            and datetime.fromisoformat(v["expires"]) > now
+        }
+
+        allowed = wl_macs | active_voucher_macs
+        logger.info(f"Startup: allowed MACs = {allowed}")
+
+        # Step 1: Remove any unauthorized MACs from the router
+        await purge_unauthorized_macs(allowed)
+
+        # Step 2: Add any missing permitted MACs
+        if whitelist:
+            logger.info(f"Syncing {len(whitelist)} whitelisted devices to router...")
+            await sync_whitelist_to_router(whitelist)
+
+    asyncio.create_task(_startup_reconcile())
 
     monitor_task = asyncio.create_task(device_monitor())
+    enforcer_task = asyncio.create_task(expiry_enforcer())
     yield
     logger.info("Shutting down — cleaning up Playwright...")
     monitor_task.cancel()
+    enforcer_task.cancel()
     await pw_cleanup()
 
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
-app = FastAPI(title="HotZone WiFi Voucher System", lifespan=lifespan)
+app = FastAPI(title="HotZone WiFi Voucher System", lifespan=lifespan, docs_url=None, redoc_url=None) # Disable docs in production
+
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.cors import CORSMiddleware
+
+# Production middlewares
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Serve static files (customer page)
 STATIC_DIR.mkdir(exist_ok=True)
@@ -195,8 +240,6 @@ class ConfigUpdate(BaseModel):
     routerPass: str | None = None
     playwrightEnabled: bool | None = None
     serverIp: str | None = None
-    dailyMode: str | None = None
-    dailyCutoffTime: str | None = None
     wifiSSID: str | None = None
     wifiPassword: str | None = None
     wifiSecurity: str | None = None
@@ -795,6 +838,68 @@ async def ws_endpoint(websocket: WebSocket):
 # Background task — device monitoring
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Background task — expiry enforcer (DB-driven, independent of scrape)
+# ---------------------------------------------------------------------------
+
+async def expiry_enforcer():
+    """
+    Every 30s: read vouchers directly from DB and enforce expiry on the router.
+    - Active vouchers past their expiry → mark expired + block on router
+    - Expired vouchers whose MAC is still somehow in the router → re-block
+    This fires independently of the DHCP scrape.
+    """
+    await asyncio.sleep(10)  # Short initial delay after startup
+    while True:
+        try:
+            now = datetime.now()
+            vouchers = get_vouchers()
+            changed = False
+
+            for v in vouchers:
+                if v.get("status") not in ("active", "expired"):
+                    continue
+                try:
+                    exp = datetime.fromisoformat(v["expires"])
+                except (KeyError, ValueError):
+                    continue
+
+                if exp <= now:
+                    mac = v.get("mac", "").upper()
+                    if v["status"] == "active":
+                        logger.info(f"[enforcer] Voucher expired for {mac} — removing from router")
+                        v["status"] = "expired"
+                        changed = True
+                        await ws_manager.broadcast({
+                            "type": "device_blocked",
+                            "mac": mac,
+                            "reason": "voucher_expired"
+                        })
+                        
+                        # Only queue the block when the voucher specifically switches to expired
+                        await block_device(mac)
+
+                        # Update devices_store status securely
+                        devices_store = get_devices_store()
+                        for ds in devices_store:
+                            if ds.get("mac", "").upper() == mac:
+                                ds["status"] = "expired"
+                                break
+                        save_devices_store(devices_store)
+
+            if changed:
+                save_vouchers(vouchers)
+
+        except Exception as e:
+            logger.error(f"Expiry enforcer error: {e}", exc_info=True)
+
+        await asyncio.sleep(30)
+
+
+# ---------------------------------------------------------------------------
+# Background task — device monitoring
+# ---------------------------------------------------------------------------
+
 async def device_monitor():
     """Run every 10 seconds: scrape devices, enforce blocks, detect spoofs."""
     await asyncio.sleep(5)  # Initial delay
@@ -890,7 +995,7 @@ async def device_monitor():
                         changed = True
                 else:
                     # Unknown device (no voucher, not whitelisted)
-                    if not existing or existing.get("status") not in ("blocked", "suspected_spoof"):
+                    if not existing or existing.get("status") not in ("blocked", "suspected_spoof", "expired"):
                         logger.info(f"Unknown device {mac} connected — blocking by default")
                         await block_device(mac)
                         

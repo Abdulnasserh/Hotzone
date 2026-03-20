@@ -294,10 +294,6 @@ tr:hover td{background:rgba(108,92,231,.04)}
       <div class="form-row"><div class="form-group"><label>WiFi Password</label><input id="cfgWifiPassword" type="password"></div>
       <div class="form-group"><label>Security</label><select id="cfgWifiSecurity"><option value="WPA">WPA/WPA2</option><option value="WEP">WEP</option><option value="nopass">Wazi (Bila Password)</option></select></div></div>
     </div>
-    <div class="card" style="margin-bottom:16px"><div class="label" style="margin-bottom:12px">Mpangilio wa Muda</div>
-      <div class="form-row"><div class="form-group"><label>Mode</label><select id="cfgDailyMode"><option value="24hrs">Masaa 24 tangu kuanza</option><option value="cutoff">Muda maalum wa kuisha</option></select></div>
-      <div class="form-group"><label>Muda wa Kuisha</label><input id="cfgCutoff" type="time" value="22:00"></div></div>
-    </div>
     <button class="btn primary" id="saveSettingsBtn" onclick="saveSettings()">Hifadhi Mipangilio</button>
   </div>
 </div>
@@ -546,8 +542,6 @@ async function loadSettings(){
     document.getElementById('cfgRouterPass').value=c.routerPass||'';
     document.getElementById('cfgPlaywright').value=String(c.playwrightEnabled!==false);
     document.getElementById('cfgServerIp').value=c.serverIp||'';
-    document.getElementById('cfgDailyMode').value=c.dailyMode||'24hrs';
-    document.getElementById('cfgCutoff').value=c.dailyCutoffTime||'22:00';
     document.getElementById('cfgWifiSSID').value=c.wifiSSID||'';
     document.getElementById('cfgWifiPassword').value=c.wifiPassword||'';
     document.getElementById('cfgWifiSecurity').value=c.wifiSecurity||'WPA';
@@ -563,8 +557,6 @@ async function saveSettings(){
     routerPass:document.getElementById('cfgRouterPass').value,
     playwrightEnabled:document.getElementById('cfgPlaywright').value==='true',
     serverIp:document.getElementById('cfgServerIp').value,
-    dailyMode:document.getElementById('cfgDailyMode').value,
-    dailyCutoffTime:document.getElementById('cfgCutoff').value,
     wifiSSID:document.getElementById('cfgWifiSSID').value,
     wifiPassword:document.getElementById('cfgWifiPassword').value,
     wifiSecurity:document.getElementById('cfgWifiSecurity').value

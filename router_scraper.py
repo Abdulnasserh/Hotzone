@@ -79,10 +79,11 @@ def _load_config() -> dict:
         
     try:
         with sqlite3.connect(db_path, timeout=5.0) as conn:
-            row = conn.execute("SELECT data FROM records WHERE key='config'").fetchone()
-            if row:
-                return json.loads(row[0])
-    except Exception:
+            rows = conn.execute("SELECT key, value FROM config").fetchall()
+            if rows:
+                return {r[0]: r[1] for r in rows}
+    except Exception as e:
+        logger.error(f"Config load error: {e}")
         pass
     return {}
 
@@ -92,7 +93,22 @@ async def _ensure_browser():
     global _playwright, _browser, _context, _page, _logged_in
     if _browser is None or not _browser.is_connected():
         _playwright = await async_playwright().start()
-        _browser = await _playwright.chromium.launch(headless=True)
+        _browser = await _playwright.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-gpu",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-default-apps",
+                "--disable-sync",
+                "--disable-translate",
+                "--metrics-recording-only",
+                "--mute-audio",
+                "--no-first-run",
+            ]
+        )
         _context = await _browser.new_context(ignore_https_errors=True)
         _page = await _context.new_page()
         _logged_in = False
@@ -156,11 +172,17 @@ async def _login(page: Page, config: dict):
         # Click login button
         login_btn = page.locator('button#btnLogin, input[type="submit"]').first
         if await login_btn.is_visible(timeout=1000):
-            await login_btn.click()
+            await login_btn.click(timeout=3000)
         else:
             await password_input.press("Enter")
 
-        await page.wait_for_timeout(3000)
+        try:
+            # Wait for dashboard to fully load by waiting for a known sidebar item
+            await page.wait_for_selector('.el-submenu__title', timeout=15000)
+        except Exception as e:
+            logger.warning(f"Dashboard did not load within 15s after login: {e}")
+
+        await page.wait_for_timeout(2000)
         _logged_in = True
         logger.info("Router login successful")
     except Exception as e:
@@ -173,8 +195,6 @@ async def _ensure_logged_in(page: Page, config: dict):
     """Re-login if session expired."""
     global _logged_in
     try:
-        # Many routers use an SPA architecture where the URL remains 'login.html'
-        # even after a successful login. We must check for the actual login form.
         needs_login = not _logged_in
         
         # Check if login form is actively shown on screen
@@ -182,10 +202,65 @@ async def _ensure_logged_in(page: Page, config: dict):
         if await username_input.is_visible(timeout=500):
             needs_login = True
             
+        # Verify if an admin UI element (like the sidebar) is actually visible.
+        # If not, the session was likely kicked by another login (e.g. manual browser login).
+        if not needs_login:
+            sidebar_check = page.locator('.el-submenu__title:has-text("System Status"), .el-menu-item:has-text("DHCP Information")').first
+            if not await sidebar_check.is_visible(timeout=1500):
+                logger.warning("Admin sidebar missing. Session likely kicked out by another login. Forcing re-login...")
+                needs_login = True
+                
+                # Check for any "OK" or "Confirm" buttons on kickout popups
+                try:
+                    kick_btn = page.locator('button:has-text("Confirm"), button:has-text("OK")').first
+                    if await kick_btn.is_visible(timeout=500):
+                        await kick_btn.click(timeout=1000)
+                except Exception:
+                    pass
+            
         if needs_login:
             await _login(page, config)
     except Exception:
         await _login(page, config)
+
+
+async def _dismiss_alerts(page: Page):
+    """Hide any blocking SUCCESS alert modals/shadows before clicking.
+    IMPORTANT: Do NOT call this while a delete confirmation dialog is open —
+    it will kill the dialog before Confirm is clicked.
+    """
+    try:
+        await page.evaluate("""
+            document.querySelectorAll('.fy-alert-box, .fy-alert-shadow, .fy-alert-header').forEach(el => {
+                el.style.display = 'none';
+                el.remove();
+            });
+        """)
+    except Exception:
+        pass
+
+
+async def _confirm_delete_dialog(page: Page):
+    """After clicking a row Delete button the router shows an .fy-alert-box
+    confirmation. We must click its Confirm button FIRST, then wait for the
+    success overlay to vanish before proceeding.
+    """
+    try:
+        # Wait up to 3s for the confirm dialog to appear
+        confirm_btn = page.locator('button:has-text("Confirm"):visible').first
+        await confirm_btn.wait_for(state="visible", timeout=3000)
+        try:
+            await confirm_btn.click(timeout=3000)
+        except Exception:
+            await confirm_btn.click(force=True, timeout=3000)
+        logger.info("Confirmed delete dialog")
+        # Wait for the success overlay to disappear before next action
+        await page.wait_for_timeout(1500)
+        # Now it's safe to dismiss any remaining success banners
+        await _dismiss_alerts(page)
+    except Exception:
+        # No dialog appeared — delete may not need confirmation on this firmware
+        pass
 
 
 async def _navigate_to_mac_filtering(page: Page, router_ip: str):
@@ -193,36 +268,34 @@ async def _navigate_to_mac_filtering(page: Page, router_ip: str):
     Navigate: Firewall sidebar → Filtering Rules → MAC Filtering tab.
     This is the correct path to reach the MAC Filtering table.
     """
-    # Step 1: Click Firewall in sidebar (#fw_menu)
-    fw_menu = page.locator('#fw_menu .el-submenu__title').first
+    await _dismiss_alerts(page)
+    fr = page.locator('text="Filtering Rules" >> visible=true').first
     try:
-        if await fw_menu.is_visible(timeout=3000):
-            await fw_menu.click()
+        await fr.wait_for(state="visible", timeout=1000)
+    except Exception:
+        # Step 1: Click Firewall in sidebar
+        fw_menu = page.locator('.el-submenu__title:has-text("Firewall")').first
+        try:
+            await fw_menu.click(force=True, timeout=5000)
             await page.wait_for_timeout(1000)
             logger.info("Clicked Firewall sidebar")
-    except Exception:
-        # Might already be expanded
-        pass
-
+        except Exception as e:
+            logger.warning(f"Could not click Firewall sidebar: {e}")
+            
     # Step 2: Click "Filtering Rules" submenu
-    fr = page.locator('text="Filtering Rules"').first
     try:
-        if await fr.is_visible(timeout=2000):
-            await fr.click()
-            await page.wait_for_timeout(2000)
-            logger.info("Clicked Filtering Rules")
+        await fr.click(force=True, timeout=5000)
+        await page.wait_for_timeout(2000)
+        logger.info("Clicked Filtering Rules")
     except Exception as e:
         logger.warning(f"Could not click Filtering Rules: {e}")
 
     # Step 3: Click "MAC Filtering" tab
     mac_tab = page.locator('text="MAC Filtering"').first
     try:
-        if await mac_tab.is_visible(timeout=2000):
-            await mac_tab.click()
-            await page.wait_for_timeout(2000)
-            logger.info("Clicked MAC Filtering tab")
-        else:
-            logger.warning("MAC Filtering tab not visible")
+        await mac_tab.click(force=True, timeout=3000)
+        await page.wait_for_timeout(2000)
+        logger.info("Clicked MAC Filtering tab")
     except Exception as e:
         logger.warning(f"Could not click MAC Filtering: {e}")
 
@@ -233,30 +306,13 @@ async def _save_and_apply(page: Page):
     The router UI sometimes shows a green alert banner (fy-alert-box)
     that overlays the button. We dismiss it first, then click.
     """
-    # Dismiss any alert banners that might be blocking the button
-    try:
-        alert_box = page.locator('.fy-alert-box, .fy-alert-header').first
-        if await alert_box.is_visible(timeout=1000):
-            # Try clicking the alert to dismiss it
-            await alert_box.click(timeout=2000)
-            logger.info("Dismissed router alert banner")
-            await page.wait_for_timeout(500)
-    except Exception:
-        pass
-
-    # Also try to hide it via JS if it's still there
-    try:
-        await page.evaluate("""
-            document.querySelectorAll('.fy-alert-box').forEach(el => {
-                el.style.display = 'none';
-                el.remove();
-            });
-        """)
-    except Exception:
-        pass
+    # Dismiss any lingering success banners (NOT delete confirm dialogs —
+    # those are handled by _confirm_delete_dialog before we get here)
+    await _dismiss_alerts(page)
 
     save_btn = page.locator('button:has-text("Save And Apply Rules")').first
-    if await save_btn.is_visible(timeout=3000):
+    try:
+        await save_btn.wait_for(state="visible", timeout=3000)
         try:
             await save_btn.click(timeout=5000)
         except Exception:
@@ -268,17 +324,17 @@ async def _save_and_apply(page: Page):
 
         # Handle confirm dialog — could be a modal with a Confirm button
         try:
-            confirm_btn = page.locator('button:has-text("Confirm")').first
-            if await confirm_btn.is_visible(timeout=3000):
-                try:
-                    await confirm_btn.click(timeout=3000)
-                except Exception:
-                    await confirm_btn.click(force=True, timeout=3000)
-                logger.info("Clicked dialog 'Confirm'")
-                await page.wait_for_timeout(1500)
+            confirm_btn = page.locator('button:has-text("Confirm"):visible').first
+            await confirm_btn.wait_for(state="visible", timeout=3000)
+            try:
+                await confirm_btn.click(timeout=3000)
+            except Exception:
+                await confirm_btn.click(force=True, timeout=3000)
+            logger.info("Clicked dialog 'Confirm'")
+            await page.wait_for_timeout(1500)
         except Exception:
             pass
-    else:
+    except Exception:
         logger.warning("'Save And Apply Rules' button not visible")
 
 
@@ -388,34 +444,39 @@ async def scrape_devices() -> list[dict]:
         devices = []
 
         try:
+            await _dismiss_alerts(page)
             # Step 1: Click "DHCP Information" in the sidebar menu
-            dhcp_item = page.locator('.el-menu-item:has-text("DHCP Information")').first
+            dhcp_item = page.locator('.el-menu-item:has-text("DHCP Information") >> visible=true').first
             try:
-                if await dhcp_item.is_visible(timeout=3000):
+                try:
+                    await dhcp_item.wait_for(state="visible", timeout=3000)
                     await dhcp_item.click(timeout=3000)
                     await page.wait_for_timeout(2000)
                     logger.info("Clicked DHCP Information sidebar item")
-                else:
+                except Exception:
                     # Fallback: expand System Status first, then click
-                    sys_status = page.locator('.el-submenu__title:has-text("System Status")').first
-                    if await sys_status.is_visible(timeout=2000):
-                        await sys_status.click(timeout=2000)
-                        await page.wait_for_timeout(1000)
+                    sys_status = page.locator('.el-submenu__title:has-text("System Status") >> visible=true').first
+                    await sys_status.click(timeout=3000)
+                    await page.wait_for_timeout(1000)
                     await dhcp_item.click(timeout=3000)
                     await page.wait_for_timeout(2000)
-            except Exception:
+            except Exception as e:
                 # Last resort: navigate by URL hash directly
-                logger.info("Sidebar click failed, navigating via URL hash")
-                await page.goto(f"http://{router_ip}/index.html#DHCP_INFO", timeout=15000)
-                await page.wait_for_timeout(3000)
+                logger.warning(f"Sidebar click failed: {e}, attempting force-click.")
+                try:
+                    await dhcp_item.click(force=True, timeout=5000)
+                    await page.wait_for_timeout(2000)
+                except Exception as e2:
+                    logger.error(f"Force-click also failed: {e2}")
+                    await page.goto(f"http://{router_ip}/index.html#DHCP_INFO", timeout=15000)
+                    await page.wait_for_timeout(3000)
 
             # Step 2: Click the "Device List" tab (some routers have this, others don't)
-            device_list_tab = page.locator('text="Device List"').first
+            device_list_tab = page.locator('text="Device List" >> visible=true').first
             try:
-                if await device_list_tab.is_visible(timeout=2000):
-                    await device_list_tab.click(timeout=2000)
-                    await page.wait_for_timeout(2000)
-                    logger.info("Clicked Device List tab")
+                await device_list_tab.click(timeout=3000)
+                await page.wait_for_timeout(2000)
+                logger.info("Clicked Device List tab")
             except Exception:
                 pass
 
@@ -466,7 +527,7 @@ async def _queue_worker():
         await _queue_event.wait()
         _queue_event.clear()
 
-        # Batch window: wait for more concurrent requests to arrive
+        # Batch window: collect concurrent requests
         await asyncio.sleep(2)
 
         global _pending_adds, _pending_deletes
@@ -482,47 +543,63 @@ async def _queue_worker():
         if not config.get("playwrightEnabled", True):
             continue
 
-        async with _lock:
+        # Retry up to 3 times on failure
+        for attempt in range(1, 4):
             try:
-                page = await _ensure_browser()
-                await _ensure_logged_in(page, config)
-                router_ip = config.get("routerIp", "192.168.1.1")
-                await _navigate_to_mac_filtering(page, router_ip)
+                async with _lock:
+                    page = await _ensure_browser()
+                    await _ensure_logged_in(page, config)
+                    router_ip = config.get("routerIp", "192.168.1.1")
+                    await _navigate_to_mac_filtering(page, router_ip)
 
-                existing = await _get_existing_macs(page)
-                changed = False
+                    existing = await _get_existing_macs(page)
+                    changed = False
 
-                for mac in deletes:
-                    mac_upper = mac.upper()
-                    if mac_upper in existing:
-                        rows = await page.locator('table tr').all()
-                        for row in rows:
-                            text = await row.inner_text()
-                            if mac_upper in text.upper():
-                                del_btn = row.locator('button:has-text("Delete")').first
-                                if await del_btn.is_visible(timeout=1000):
-                                    await del_btn.click()
-                                    await page.wait_for_timeout(1000)
+                    for mac in deletes:
+                        mac_upper = mac.upper()
+                        if mac_upper in existing:
+                            rows = await page.locator('table tr').all()
+                            for row in rows:
+                                text = await row.inner_text()
+                                if mac_upper in text.upper():
+                                    del_link = row.locator('a:has-text("Delete"), button:has-text("Delete")').first
+                                    try:
+                                        await del_link.click(timeout=3000)
+                                    except Exception:
+                                        await del_link.click(force=True, timeout=3000)
+                                    # Handle the confirmation dialog the router shows after Delete
+                                    await _confirm_delete_dialog(page)
                                     changed = True
                                     logger.info(f"Batched delete for {mac_upper}")
                                     break
+                        else:
+                            logger.info(f"{mac_upper} already absent from router — no delete needed")
+                            changed = True  # Still call save if we had adds
 
-                for mac in adds:
-                    mac_upper = mac.upper()
-                    if mac_upper not in existing:
-                        if await _add_single_mac(page, mac_upper):
-                            changed = True
-                            await page.wait_for_timeout(500)
+                    for mac in adds:
+                        mac_upper = mac.upper()
+                        if mac_upper not in existing:
+                            if await _add_single_mac(page, mac_upper):
+                                changed = True
+                                await page.wait_for_timeout(500)
 
-                if changed:
-                    await _save_and_apply(page)
-                    logger.info("Batched updates successfully applied routing rules.")
+                    if changed:
+                        await _save_and_apply(page)
+                        logger.info("Batched updates successfully applied routing rules.")
+
+                break  # Success — exit retry loop
 
             except Exception as e:
-                logger.error(f"Batch worker failed: {e}")
+                logger.error(f"Batch worker attempt {attempt}/3 failed: {e}")
                 global _logged_in
                 _logged_in = False
-                # Simple retry mechanism could be added here
+                if attempt < 3:
+                    # Put items back in the queue for retry
+                    _pending_adds.update(adds)
+                    _pending_deletes.update(deletes)
+                    await asyncio.sleep(5 * attempt)  # Backoff: 5s, 10s
+                else:
+                    logger.error(f"Batch worker gave up after 3 attempts for adds={adds} deletes={deletes}")
 
 async def unblock_device(mac: str) -> bool:
     """
@@ -600,6 +677,63 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
 
         except Exception as e:
             logger.error(f"Whitelist sync failed: {e}")
+            global _logged_in
+            _logged_in = False
+            return False
+
+
+async def purge_unauthorized_macs(allowed_macs: set) -> bool:
+    """
+    Open the router MAC Filtering page and remove any MAC that is NOT in
+    `allowed_macs`. Called at startup to evict expired/blocked devices that
+    survived a previous failed block attempt.
+    """
+    config = _load_config()
+    if not config.get("playwrightEnabled", True):
+        return False
+
+    async with _lock:
+        page = await _ensure_browser()
+        await _ensure_logged_in(page, config)
+        router_ip = config.get("routerIp", "192.168.1.1")
+
+        try:
+            await _navigate_to_mac_filtering(page, router_ip)
+            existing = await _get_existing_macs(page)
+            allowed_upper = {m.upper() for m in allowed_macs}
+
+            to_remove = existing - allowed_upper
+            if not to_remove:
+                logger.info("Router MAC filter is clean — no unauthorized MACs found")
+                return True
+
+            logger.info(f"Purging {len(to_remove)} unauthorized MACs from router: {to_remove}")
+            changed = False
+
+            for mac_upper in to_remove:
+                rows = await page.locator('table tr').all()
+                for row in rows:
+                    text = await row.inner_text()
+                    if mac_upper in text.upper():
+                        del_link = row.locator('a:has-text("Delete"), button:has-text("Delete")').first
+                        try:
+                            await del_link.click(timeout=3000)
+                        except Exception:
+                            await del_link.click(force=True, timeout=3000)
+                        # Confirm the router's delete confirmation dialog
+                        await _confirm_delete_dialog(page)
+                        changed = True
+                        logger.info(f"Purged unauthorized MAC: {mac_upper}")
+                        break
+
+            if changed:
+                await _save_and_apply(page)
+                logger.info(f"✅ Purge complete — removed {len(to_remove)} unauthorized MACs")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"MAC purge failed: {e}")
             global _logged_in
             _logged_in = False
             return False
