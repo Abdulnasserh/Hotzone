@@ -5,7 +5,7 @@ a = Analysis(
     ['gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('static', 'static'), ('hotzone-admin.html', '.'), ('/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/playwright/driver', 'playwright/driver'), ('/Users/abdul/Library/Caches/ms-playwright/chromium_headless_shell-1208', 'playwright/driver/package/.local-browsers/chromium_headless_shell-1208')],
+    datas=[('static', 'static'), ('hotzone-admin.html', '.'), ('/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages/playwright/driver', 'playwright/driver'), ('/Users/abdul/Library/Caches/ms-playwright/chromium-1208', 'playwright/driver/package/.local-browsers/chromium-1208')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

@@ -13,15 +13,15 @@ echo "📍 Playwright driver path: $PW_DRIVER"
 # Browsers installed by 'playwright install chromium' land in ~/Library/Caches/ms-playwright
 BROWSERS_CACHE="$HOME/Library/Caches/ms-playwright"
 
-# Find the chromium_headless_shell folder (e.g. chromium_headless_shell-1208)
-HEADLESS_DIR=$(ls -d "$BROWSERS_CACHE"/chromium_headless_shell-* 2>/dev/null | head -1)
+# Find the chromium folder (e.g. chromium-1208)
+HEADLESS_DIR=$(ls -d "$BROWSERS_CACHE"/chromium-* 2>/dev/null | head -1)
 HEADLESS_NAME=$(basename "$HEADLESS_DIR")
 
 if [ -z "$HEADLESS_DIR" ]; then
-    echo "❌ Could not find chromium_headless_shell in $BROWSERS_CACHE"
+    echo "❌ Could not find chromium in $BROWSERS_CACHE"
     exit 1
 fi
-echo "📍 Headless shell path: $HEADLESS_DIR"
+echo "📍 Chromium path: $HEADLESS_DIR"
 
 # Playwright at runtime looks for browsers at:
 #   <playwright_package>/driver/package/.local-browsers/<browser_folder>/
@@ -37,8 +37,8 @@ pyinstaller --noconfirm --onedir --windowed \
     --add-data "$HEADLESS_DIR:$DEST_BROWSERS" \
     gui.py
 
-# Ensure the bundled chrome-headless-shell binary is executable
-BUILT_SHELL=$(find dist/HotZonePro.app -name "chrome-headless-shell" -type f 2>/dev/null | head -1)
+# Ensure the bundled chrome binary is executable
+BUILT_SHELL=$(find dist/HotZonePro.app -name "chrome" -type f 2>/dev/null | head -1)
 if [ -n "$BUILT_SHELL" ]; then
     chmod +x "$BUILT_SHELL"
     echo "✅ Made $BUILT_SHELL executable"

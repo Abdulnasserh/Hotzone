@@ -39,10 +39,10 @@ jobs:
         
         # Get the browser cache directory (Windows: %LOCALAPPDATA%\ms-playwright)
         $browsers_cache = "$env:LOCALAPPDATA\ms-playwright"
-        $headless_dir = Get-ChildItem -Path $browsers_cache -Filter "chromium_headless_shell-*" -Directory | Select-Object -First 1
+        $headless_dir = Get-ChildItem -Path $browsers_cache -Filter "chromium-*" -Directory | Select-Object -First 1
         
         if ($null -eq $headless_dir) {
-          Write-Error "Could not find chromium_headless_shell in $browsers_cache"
+          Write-Error "Could not find chromium in $browsers_cache"
           exit 1
         }
         
