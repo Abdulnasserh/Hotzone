@@ -431,7 +431,7 @@ async def _add_single_mac(page: Page, mac: str) -> bool:
 # ---------------------------------------------------------------------------
 
 async def scrape_devices() -> list[dict]:
-    """Scrape the DHCP device list from the router."""
+    """Scrape the DHCP device list from the router with high redundancy."""
     config = _load_config()
     if not config.get("playwrightEnabled", True):
         return []
@@ -445,62 +445,96 @@ async def scrape_devices() -> list[dict]:
 
         try:
             await _dismiss_alerts(page)
-            # Step 1: Click "DHCP Information" in the sidebar menu
-            dhcp_item = page.locator('.el-menu-item:has-text("DHCP Information") >> visible=true').first
-            try:
+            
+            # Step 1: Click "DHCP Information" or variants in the sidebar
+            # We try multiple common labels found on Airtel/ZTE routers
+            dhcp_selectors = [
+                '.el-menu-item:has-text("DHCP Information")',
+                '.el-menu-item:has-text("DHCP Client List")',
+                '.el-menu-item:has-text("DHCP List")',
+                '.el-menu-item:has-text("Connected Devices")',
+                'text="DHCP Information"',
+                'text="DHCP Client List"'
+            ]
+            
+            success = False
+            for selector in dhcp_selectors:
                 try:
-                    await dhcp_item.wait_for(state="visible", timeout=3000)
-                    await dhcp_item.click(timeout=3000)
-                    await page.wait_for_timeout(2000)
-                    logger.info("Clicked DHCP Information sidebar item")
+                    item = page.locator(f'{selector} >> visible=true').first
+                    if await item.is_visible(timeout=2000):
+                        await item.click(timeout=3000)
+                        success = True
+                        break
                 except Exception:
-                    # Fallback: expand System Status first, then click
-                    sys_status = page.locator('.el-submenu__title:has-text("System Status") >> visible=true').first
-                    await sys_status.click(timeout=3000)
-                    await page.wait_for_timeout(1000)
-                    await dhcp_item.click(timeout=3000)
+                    continue
+            
+            if not success:
+                # Try expanding potential parent menus first
+                for parent_label in ["System Status", "Status", "Network Settings", "Advanced"]:
+                    try:
+                        parent = page.locator(f'.el-submenu__title:has-text("{parent_label}") >> visible=true').first
+                        if await parent.is_visible(timeout=1000):
+                            await parent.click(timeout=2000)
+                            await page.wait_for_timeout(500)
+                    except Exception:
+                        continue
+                
+                # Try clicking again after expansion
+                for selector in dhcp_selectors:
+                    try:
+                        item = page.locator(f'{selector} >> visible=true').first
+                        if await item.is_visible(timeout=2000):
+                            await item.click(timeout=3000)
+                            success = True
+                            break
+                    except Exception:
+                        continue
+
+            if not success:
+                logger.warning("Sidebar DHCP link not found via click, attempting direct URL hash...")
+                # Direct jump to common hash locations
+                for h in ["DHCP_INFO", "DHCP_CLIENT_LIST", "connected_devices"]:
+                    await page.goto(f"http://{router_ip}/index.html#{h}", timeout=5000)
                     await page.wait_for_timeout(2000)
-            except Exception as e:
-                # Last resort: navigate by URL hash directly
-                logger.warning(f"Sidebar click failed: {e}, attempting force-click.")
+            
+            await page.wait_for_timeout(2500) # Give it time to render
+
+            # Step 2: Click "Device List" tab if it exists
+            tabs = ['text="Device List"', 'text="DHCP Client List"', 'text="LAN Devices"']
+            for t in tabs:
                 try:
-                    await dhcp_item.click(force=True, timeout=5000)
-                    await page.wait_for_timeout(2000)
-                except Exception as e2:
-                    logger.error(f"Force-click also failed: {e2}")
-                    await page.goto(f"http://{router_ip}/index.html#DHCP_INFO", timeout=15000)
-                    await page.wait_for_timeout(3000)
+                    tab = page.locator(f'{t} >> visible=true').first
+                    if await tab.is_visible(timeout=1000):
+                        await tab.click(timeout=2000)
+                        await page.wait_for_timeout(1500)
+                        break
+                except Exception:
+                    continue
 
-            # Step 2: Click the "Device List" tab (some routers have this, others don't)
-            device_list_tab = page.locator('text="Device List" >> visible=true').first
+            # Step 3: Wait for table rows. Increase timeout for slow Windows/Router environments.
             try:
-                await device_list_tab.click(timeout=3000)
-                await page.wait_for_timeout(2000)
-                logger.info("Clicked Device List tab")
+                await page.wait_for_selector('table tr', timeout=8000)
             except Exception:
-                pass
+                logger.warning("No table found on DHCP page after 8s.")
 
-            # Step 3: Wait for the table to populate, then parse
-            try:
-                # Max 5s wait for a table row to appear so we don't scrape empty prematurely
-                await page.wait_for_selector('table tr', timeout=5000)
-            except Exception:
-                logger.warning("No table found on DHCP page (timeout)")
-
+            # Step 4: Scrape rows
             rows = await page.locator('table tr').all()
             for row in rows:
                 cells = await row.locator('td').all()
                 if len(cells) >= 4:
                     try:
+                        # Common Airtel/ZTE structure: Index | Hostname | MAC | IP | Lease
                         host = (await cells[1].inner_text()).strip()
                         mac = (await cells[2].inner_text()).strip().upper()
                         ip = (await cells[3].inner_text()).strip()
+                        
+                        # Validate MAC format
                         if mac and ":" in mac and len(mac) == 17:
                             devices.append({"host": host, "mac": mac, "ip": ip})
                     except Exception:
                         continue
 
-            logger.info(f"Scraped {len(devices)} devices from router")
+            logger.info(f"Successfully scraped {len(devices)} devices from router")
         except Exception as e:
             logger.error(f"Failed to scrape devices: {e}")
             global _logged_in
