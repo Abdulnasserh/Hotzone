@@ -446,58 +446,58 @@ async def scrape_devices() -> list[dict]:
         try:
             await _dismiss_alerts(page)
             
-            # Step 1: Click "DHCP Information" or variants in the sidebar
-            # We try multiple common labels found on Airtel/ZTE routers
-            dhcp_selectors = [
-                '.el-menu-item:has-text("DHCP Information")',
-                '.el-menu-item:has-text("DHCP Client List")',
-                '.el-menu-item:has-text("DHCP List")',
-                '.el-menu-item:has-text("Connected Devices")',
-                'text="DHCP Information"',
-                'text="DHCP Client List"'
-            ]
-            
+            # ----- Strategy 1: Direct JS click on #DHCP_INFO -----
+            # The router sidebar uses an Element UI accordion. The DHCP
+            # Information item has id="DHCP_INFO" but is hidden inside
+            # a collapsed parent submenu. Using JavaScript .click()
+            # bypasses Playwright's visibility check and triggers the
+            # router's own navigation handler.
             success = False
-            for selector in dhcp_selectors:
-                try:
-                    item = page.locator(f'{selector} >> visible=true').first
-                    if await item.is_visible(timeout=2000):
-                        await item.click(timeout=3000)
-                        success = True
-                        break
-                except Exception:
-                    continue
-            
+            try:
+                clicked = await page.evaluate("""() => {
+                    const el = document.getElementById('DHCP_INFO');
+                    if (el) { el.click(); return true; }
+                    return false;
+                }""")
+                if clicked:
+                    success = True
+                    logger.info("Navigated to DHCP via JS click on #DHCP_INFO")
+            except Exception as e:
+                logger.debug(f"JS click on #DHCP_INFO failed: {e}")
+
+            # ----- Strategy 2: Expand "System Status" then click -----
             if not success:
-                # Try expanding potential parent menus first
-                for parent_label in ["System Status", "Status", "Network Settings", "Advanced"]:
+                try:
+                    parent = page.locator('.el-submenu__title:has-text("System Status")').first
+                    await parent.click(force=True, timeout=3000)
+                    await page.wait_for_timeout(800)
+                    logger.info("Expanded 'System Status' sidebar")
+
+                    dhcp_item = page.locator('#DHCP_INFO').first
+                    if await dhcp_item.is_visible(timeout=2000):
+                        await dhcp_item.click(timeout=3000)
+                        success = True
+                        logger.info("Clicked DHCP Information after expanding System Status")
+                except Exception as e:
+                    logger.debug(f"Sidebar expand+click failed: {e}")
+
+            # ----- Strategy 3: Direct URL hash navigation -----
+            if not success:
+                logger.warning("Sidebar DHCP link not found via click, attempting direct URL hash...")
+                for h in ["DHCP_INFO", "DHCP_CLIENT_LIST", "connected_devices"]:
                     try:
-                        parent = page.locator(f'.el-submenu__title:has-text("{parent_label}") >> visible=true').first
-                        if await parent.is_visible(timeout=1000):
-                            await parent.click(timeout=2000)
-                            await page.wait_for_timeout(500)
-                    except Exception:
-                        continue
-                
-                # Try clicking again after expansion
-                for selector in dhcp_selectors:
-                    try:
-                        item = page.locator(f'{selector} >> visible=true').first
-                        if await item.is_visible(timeout=2000):
-                            await item.click(timeout=3000)
+                        await page.goto(f"http://{router_ip}/index.html#{h}", timeout=8000)
+                        await page.wait_for_timeout(2500)
+                        # Check if a DHCP table actually rendered
+                        rows = await page.locator('table tr').count()
+                        if rows > 0:
                             success = True
+                            logger.info(f"Navigated via hash #{h}, found {rows} table rows")
                             break
                     except Exception:
                         continue
 
-            if not success:
-                logger.warning("Sidebar DHCP link not found via click, attempting direct URL hash...")
-                # Direct jump to common hash locations
-                for h in ["DHCP_INFO", "DHCP_CLIENT_LIST", "connected_devices"]:
-                    await page.goto(f"http://{router_ip}/index.html#{h}", timeout=5000)
-                    await page.wait_for_timeout(2000)
-            
-            await page.wait_for_timeout(2500) # Give it time to render
+            await page.wait_for_timeout(2000)  # Give it time to render
 
             # Step 2: Click "Device List" tab if it exists
             tabs = ['text="Device List"', 'text="DHCP Client List"', 'text="LAN Devices"']
