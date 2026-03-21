@@ -287,7 +287,8 @@ tr:hover td{background:rgba(108,92,231,.04)}
       <div class="form-group"><label>Playwright Automation</label><select id="cfgPlaywright"><option value="true">Imewashwa</option><option value="false">Imezimwa</option></select></div>
     </div>
     <div class="card" style="margin-bottom:16px"><div class="label" style="margin-bottom:12px">Server Settings</div>
-      <div class="form-group"><label>Server IP (mashine hii)</label><input id="cfgServerIp"></div>
+      <div class="form-row"><div class="form-group"><label>Server IP (mashine hii)</label><input id="cfgServerIp"></div>
+      <div class="form-group"><label>Admin PIN (Namba 4)</label><input id="cfgAdminPin" type="password" placeholder="2004" maxlength="4" inputmode="numeric"></div></div>
     </div>
     <div class="card" style="margin-bottom:16px"><div class="label" style="margin-bottom:12px">WiFi Network (kwa QR Connect)</div>
       <div class="form-group"><label>WiFi SSID (Jina la Network)</label><input id="cfgWifiSSID" placeholder="HotZone WiFi"></div>
@@ -556,6 +557,7 @@ async function loadSettings(){
     document.getElementById('cfgRouterPass').value=c.routerPass||'';
     document.getElementById('cfgPlaywright').value=String(c.playwrightEnabled!==false);
     document.getElementById('cfgServerIp').value=c.serverIp||'';
+    document.getElementById('cfgAdminPin').value=c.adminPin||'2004';
     document.getElementById('cfgWifiSSID').value=c.wifiSSID||'';
     document.getElementById('cfgWifiPassword').value=c.wifiPassword||'';
     document.getElementById('cfgWifiSecurity').value=c.wifiSecurity||'WPA';
@@ -571,6 +573,7 @@ async function saveSettings(){
     routerPass:document.getElementById('cfgRouterPass').value,
     playwrightEnabled:document.getElementById('cfgPlaywright').value==='true',
     serverIp:document.getElementById('cfgServerIp').value,
+    adminPin:document.getElementById('cfgAdminPin').value,
     wifiSSID:document.getElementById('cfgWifiSSID').value,
     wifiPassword:document.getElementById('cfgWifiPassword').value,
     wifiSecurity:document.getElementById('cfgWifiSecurity').value

@@ -477,6 +477,8 @@ async def get_config_route():
         safe["routerPass"] = "••••••••"
     if safe.get("wifiPassword"):
         safe["wifiPassword"] = "••••••••"
+    if safe.get("adminPin"):
+        safe["adminPin"] = "••••"
     return safe
 
 
