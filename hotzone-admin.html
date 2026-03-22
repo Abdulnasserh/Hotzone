@@ -572,7 +572,7 @@ async function refreshActiveAccess(){
     tb.innerHTML=activeDevs.map(d=>`<tr>
       <td>${d.host||'—'}</td><td style="font-size:11px">${d.mac}</td><td>${d.ip}</td>
       <td>
-        ${d.status==='active'?'<span class="badge active" style="margin-right:6px">Vocha Hai</span><span class="timer" style="font-size:11px">bado '+fmtTime(d.time_remaining)+'</span>':''}
+        ${d.status==='active'?'<span class="badge active" style="margin-right:6px">Vocha Hai</span><span style="font-size:11px">bado </span><span class="timer" style="font-size:11px">'+fmtTime(d.time_remaining)+'</span>':''}
         ${d.status==='whitelisted'?'<span class="badge whitelisted">Whitelist</span>':''}
         ${d.status==='unauthorized_allowed'?'<span class="badge unauthorized_allowed">IMEUNGANISHWA (LEAK)</span>':''}
       </td>
