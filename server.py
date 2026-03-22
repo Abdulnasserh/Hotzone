@@ -325,13 +325,12 @@ async def my_status(request: Request):
                     pass
     return {"active": False}
 
+_cached_router_devices = []
+
 @app.get("/api/devices")
 async def list_devices():
-    try:
-        router_devices = await scrape_devices()
-    except Exception as e:
-        logger.error(f"Scrape failed: {e}")
-        router_devices = []
+    global _cached_router_devices
+    router_devices = _cached_router_devices
 
     whitelist = get_whitelist()
     vouchers = get_vouchers()
@@ -365,7 +364,10 @@ async def list_devices():
                     entry["status"] = "expired"
                     entry["voucher_id"] = voucher["id"]
             else:
-                entry["status"] = "unknown"
+                if entry.get("router_allowed", False):
+                    entry["status"] = "unauthorized_allowed"
+                else:
+                    entry["status"] = "unknown"
 
         enriched.append(entry)
 
@@ -374,9 +376,21 @@ async def list_devices():
 
 @app.post("/api/devices/{mac}/block")
 async def block_device_route(mac: str):
+    mac_upper = mac.upper()
     whitelist = get_whitelist()
-    if any(w["mac"].upper() == mac.upper() for w in whitelist):
+    if any(w["mac"].upper() == mac_upper for w in whitelist):
         raise HTTPException(status_code=403, detail="Cannot block whitelisted device")
+
+    # Terminate any active vouchers for this MAC
+    vouchers = get_vouchers()
+    v_changed = False
+    for v in vouchers:
+        if v["mac"].upper() == mac_upper and v["status"] == "active":
+            v["status"] = "expired"
+            v["expires"] = datetime.now().isoformat()
+            v_changed = True
+    if v_changed:
+        save_vouchers(vouchers)
 
     success = await block_device(mac)
 
@@ -394,11 +408,37 @@ async def block_device_route(mac: str):
 
 @app.post("/api/devices/{mac}/unblock")
 async def unblock_device_route(mac: str):
+    mac_upper = mac.upper()
+    vouchers = get_vouchers()
+    now = datetime.now()
+    
+    # Check if there is already an active voucher
+    has_active = any(v["mac"].upper() == mac_upper and v["status"] == "active" for v in vouchers)
+    
+    if not has_active:
+        # Create a 24h manual bypass voucher so the background worker doesn't instantly re-block it!
+        expires = now + timedelta(hours=24)
+        vid = str(uuid.uuid4())[:8]
+        vouchers.append({
+            "id": vid,
+            "reference": "MANUAL-BYPASS",
+            "mac": mac_upper,
+            "hostname": "Manual Unblock",
+            "ip": "",
+            "phone": "ADMIN",
+            "amount": 0,
+            "currency": "TZS",
+            "status": "active",
+            "created": now.isoformat(),
+            "expires": expires.isoformat()
+        })
+        save_vouchers(vouchers)
+
     success = await unblock_device(mac)
 
     devices_store = get_devices_store()
     for ds in devices_store:
-        if ds.get("mac", "").upper() == mac.upper():
+        if ds.get("mac", "").upper() == mac_upper:
             ds["status"] = "active"
             break
     save_devices_store(devices_store)
@@ -898,7 +938,7 @@ async def expiry_enforcer():
                 save_vouchers(vouchers)
 
         except Exception as e:
-            logger.error(f"Expiry enforcer error: {e}", exc_info=True)
+            logger.error(f"Expiry enforcer error: {e}")
 
         await asyncio.sleep(30)
 
@@ -918,6 +958,8 @@ async def device_monitor():
                 continue
 
             router_devices = await scrape_devices()
+            global _cached_router_devices
+            _cached_router_devices = router_devices
             whitelist = get_whitelist()
             vouchers = get_vouchers()
             devices_store = get_devices_store()
@@ -1051,7 +1093,7 @@ async def device_monitor():
             })
 
         except Exception as e:
-            logger.error(f"Device monitor error: {e}", exc_info=True)
+            logger.error(f"Device monitor error: {e}")
 
         await asyncio.sleep(10)
 

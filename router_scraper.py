@@ -172,6 +172,15 @@ async def _ensure_browser():
             raise
 
         _context = await _browser.new_context(ignore_https_errors=True)
+        
+        # Block expensive resources like router logos and heavy fonts to drastically speed up navigation!
+        async def intercept_route(route):
+            if route.request.resource_type in ["image", "media", "font"]:
+                await route.abort()
+            else:
+                await route.continue_()
+                
+        await _context.route("**/*", intercept_route)
         _page = await _context.new_page()
         _logged_in = False
     return _page
@@ -239,10 +248,21 @@ async def _login(page: Page, config: dict):
             await password_input.press("Enter")
 
         try:
-            # Wait for dashboard to fully load by waiting for a known sidebar item
-            await page.wait_for_selector('.el-submenu__title', timeout=15000)
+            # Wait for dashboard to fully load by looking for common router elements
+            await page.wait_for_selector('.el-submenu__title, #DHCP_INFO, #System_Status, div.menu, nav, #app, .sidebar', timeout=5000)
         except Exception as e:
-            logger.warning(f"Dashboard did not load within 15s after login: {e}")
+            # Check if login failed by seeing if we are still on the login page
+            if await page.locator('input#username, input[name="username"]').first.is_visible(timeout=1000):
+                error_msg = ""
+                try:
+                    err_loc = page.locator('.el-message-box__message, .el-message, .error, :text("locked"), :text("incorrect")').first
+                    if await err_loc.is_visible(timeout=500):
+                        error_msg = await err_loc.inner_text()
+                except Exception:
+                    pass
+                raise Exception(f"Still on login page! {error_msg}".strip())
+                
+            logger.warning("Dashboard elements did not appear within 5s, proceeding anyway...")
 
         await page.wait_for_timeout(2000)
         _logged_in = True
@@ -264,12 +284,13 @@ async def _ensure_logged_in(page: Page, config: dict):
         if await username_input.is_visible(timeout=500):
             needs_login = True
             
-        # Verify if an admin UI element (like the sidebar) is actually visible.
+        # Verify if an admin UI element is actually visible.
         # If not, the session was likely kicked by another login (e.g. manual browser login).
         if not needs_login:
-            sidebar_check = page.locator('.el-submenu__title:has-text("System Status"), .el-menu-item:has-text("DHCP Information")').first
+            # Support multiple router variants: element-ui classes, or basic IDs
+            sidebar_check = page.locator('.el-submenu__title, #DHCP_INFO, .sidebar, nav, div.menu, .header, #header').first
             if not await sidebar_check.is_visible(timeout=1500):
-                logger.warning("Admin sidebar missing. Session likely kicked out by another login. Forcing re-login...")
+                logger.warning("Admin UI elements missing. Session likely kicked out. Forcing re-login...")
                 needs_login = True
                 
                 # Check for any "OK" or "Confirm" buttons on kickout popups
@@ -499,13 +520,12 @@ async def scrape_devices() -> list[dict]:
         return []
 
     async with _lock:
-        page = await _ensure_browser()
-        await _ensure_logged_in(page, config)
-
         router_ip = config.get("routerIp", "192.168.1.1")
         devices = []
 
         try:
+            page = await _ensure_browser()
+            await _ensure_logged_in(page, config)
             await _dismiss_alerts(page)
             
             # ----- Strategy 1: Direct JS click on #DHCP_INFO -----
@@ -559,6 +579,9 @@ async def scrape_devices() -> list[dict]:
                     except Exception:
                         continue
 
+            if not success:
+                raise Exception("Critically failed to navigate to the DHCP devices page! Aborting scrape to avoid reading rogue data.")
+
             await page.wait_for_timeout(2000)  # Give it time to render
 
             # Step 2: Click "Device List" tab if it exists
@@ -583,20 +606,62 @@ async def scrape_devices() -> list[dict]:
             rows = await page.locator('table tr').all()
             for row in rows:
                 cells = await row.locator('td').all()
-                if len(cells) >= 4:
+                if len(cells) > 0:
                     try:
-                        # Common Airtel/ZTE structure: Index | Hostname | MAC | IP | Lease
-                        host = (await cells[1].inner_text()).strip()
-                        mac = (await cells[2].inner_text()).strip().upper()
-                        ip = (await cells[3].inner_text()).strip()
+                        host = "unknown"
+                        mac = ""
+                        ip = ""
                         
-                        # Validate MAC format
-                        if mac and ":" in mac and len(mac) == 17:
+                        for cell in cells:
+                            text = (await cell.inner_text()).strip()
+                            if not text:
+                                continue
+                            
+                            # Check if it's a MAC address
+                            if ":" in text and len(text) == 17 and text.count(":") == 5:
+                                mac = text.upper()
+                            # Check if it's an IP address
+                            elif text.count(".") == 3 and any(c.isdigit() for c in text):
+                                ip = text
+                            # Otherwise assume it might be a hostname (skip simple numbers or time strings)
+                            elif len(text) > 1 and not text.replace(".", "").isdigit() and "day" not in text.lower() and "hour" not in text.lower():
+                                host = text
+                        
+                        if mac and len(mac) == 17:
                             devices.append({"host": host, "mac": mac, "ip": ip})
-                    except Exception:
+                        else:
+                            # Log skipped rows for debugging
+                            row_text = (await row.inner_text()).replace("\n", " | ")
+                            logger.debug(f"Skipped row (no MAC found): {row_text}")
+                    except Exception as e:
+                        logger.warning(f"Error parsing row: {e}")
                         continue
 
-            logger.info(f"Successfully scraped {len(devices)} devices from router")
+            logger.info(f"Successfully scraped {len(devices)} DHCP connected devices from router")
+            
+            # --- Check actual router MAC Filters ---
+            try:
+                await _navigate_to_mac_filtering(page, router_ip)
+                allowed_macs = await _get_existing_macs(page)
+                
+                # Mark connected devices that are allowed
+                dhcp_macs = set()
+                for d in devices:
+                    mac_upper = d["mac"].upper()
+                    dhcp_macs.add(mac_upper)
+                    d["router_allowed"] = mac_upper in allowed_macs
+                
+                # Add allowed devices that are NOT in DHCP
+                for mac in allowed_macs:
+                    if mac not in dhcp_macs:
+                        devices.append({
+                            "host": "Sio Mtandaoni",
+                            "mac": mac,
+                            "ip": "—",
+                            "router_allowed": True
+                        })
+            except Exception as e:
+                logger.warning(f"Failed to scrape MAC filtering table: {e}")
         except Exception as e:
             logger.error(f"Failed to scrape devices: {e}")
             global _logged_in
@@ -733,11 +798,11 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
         return True
 
     async with _lock:
-        page = await _ensure_browser()
-        await _ensure_logged_in(page, config)
-        router_ip = config.get("routerIp", "192.168.1.1")
-
         try:
+            page = await _ensure_browser()
+            await _ensure_logged_in(page, config)
+            router_ip = config.get("routerIp", "192.168.1.1")
+
             await _navigate_to_mac_filtering(page, router_ip)
 
             existing = await _get_existing_macs(page)
@@ -789,11 +854,11 @@ async def purge_unauthorized_macs(allowed_macs: set) -> bool:
         return False
 
     async with _lock:
-        page = await _ensure_browser()
-        await _ensure_logged_in(page, config)
-        router_ip = config.get("routerIp", "192.168.1.1")
-
         try:
+            page = await _ensure_browser()
+            await _ensure_logged_in(page, config)
+            router_ip = config.get("routerIp", "192.168.1.1")
+
             await _navigate_to_mac_filtering(page, router_ip)
             existing = await _get_existing_macs(page)
             allowed_upper = {m.upper() for m in allowed_macs}
