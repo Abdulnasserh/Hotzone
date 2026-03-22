@@ -39,6 +39,8 @@ tr:hover td{background:rgba(108,92,231,.04)}
 .badge.blocked{background:rgba(255,255,255,.06);color:var(--td)}
 .badge.suspected_spoof{background:var(--rg);color:var(--red)}
 .badge.unauthorized_allowed{background:var(--rg);color:white;border:1px solid var(--red)}
+.badge.pending{background:var(--og);color:var(--orange)}
+.badge.blocking{background:var(--rg);color:var(--red)}
 .btn{padding:8px 16px;border:1px solid var(--border);border-radius:10px;background:var(--s2);color:var(--t);font-size:13px;cursor:pointer;transition:.2s;font-family:inherit}
 .btn:hover{border-color:var(--accent);background:var(--s3)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -522,7 +524,7 @@ async function refreshDevices(){
     if(!devs.length){tb.innerHTML='<tr><td colspan="6" class="empty">Hakuna vifaa vilivyopatikana ndani ya router.</td></tr>';return;}
     tb.innerHTML=devs.map(d=>`<tr>
       <td>${d.host||'—'}</td><td style="font-size:11px">${d.mac}</td><td>${d.ip}</td>
-      <td><span class="badge ${d.status}">${d.status==='unauthorized_allowed'?'IMEUNGANISHWA (LEAK)':d.status}</span></td>
+      <td><span class="badge ${d.status}">${d.status==='unauthorized_allowed'?'IMEUNGANISHWA (LEAK)':d.status==='pending'?'Inasubiri...':d.status==='blocking'?'Inazuia...':d.status}</span></td>
       <td class="timer">${d.status==='active' ? fmtTime(d.time_remaining) : '—'}</td>
       <td>${d.status==='whitelisted'?'<span style="font-size:11px;color:var(--td)">Kimelindwa</span>':d.status==='unauthorized_allowed'?
         `<div style="display:flex;gap:4px">

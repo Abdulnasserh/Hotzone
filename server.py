@@ -312,7 +312,8 @@ async def my_status(request: Request):
     if not client_ip:
         client_ip = request.client.host if request.client else ""
         
-    devices = get_devices_store()
+    res = await list_devices()
+    devices = res.get("devices", [])
     for d in devices:
         if d.get("ip") == client_ip and d.get("status") == "active":
             expires = d.get("expires")
@@ -352,37 +353,37 @@ async def list_devices():
         mac = d["mac"].upper()
         entry = {**d, "mac": mac}
 
-        if mac in wl_macs:
-            entry["status"] = "whitelisted"
-        else:
-            # Check if admin manually blocked this device (takes priority over router state)
-            ds_status = store_status.get(mac, "")
-            if ds_status == "blocked":
-                entry["status"] = "blocked"
-            else:
-                # Check voucher
-                voucher = None
-                for v in vouchers:
-                    if v["mac"].upper() == mac and v["status"] == "active":
-                        voucher = v
-                        break
+        router_allowed = entry.get("router_allowed", False)
+        is_wl = mac in wl_macs
+        ds_status = store_status.get(mac, "")
 
-                if voucher:
-                    exp = datetime.fromisoformat(voucher["expires"])
-                    if exp > now:
-                        entry["status"] = "active"
-                        entry["expires"] = voucher["expires"]
-                        entry["voucher_id"] = voucher["id"]
-                        remaining = (exp - now).total_seconds()
-                        entry["time_remaining"] = int(remaining)
-                    else:
-                        entry["status"] = "expired"
-                        entry["voucher_id"] = voucher["id"]
-                else:
-                    if entry.get("router_allowed", False):
-                        entry["status"] = "unauthorized_allowed"
-                    else:
-                        entry["status"] = "unknown"
+        voucher = None
+        for v in vouchers:
+            if v["mac"].upper() == mac and v["status"] == "active":
+                voucher = v
+                break
+
+        exp = None
+        if voucher:
+            exp = datetime.fromisoformat(voucher["expires"])
+            if exp > now:
+                entry["expires"] = voucher["expires"]
+                entry["voucher_id"] = voucher["id"]
+                entry["time_remaining"] = int((exp - now).total_seconds())
+            else:
+                entry["voucher_id"] = voucher["id"]
+
+        # Status determination strictly based on router TRUTH
+        if ds_status == "blocked":
+            entry["status"] = "blocking" if router_allowed else "blocked"
+        elif is_wl:
+            entry["status"] = "whitelisted" if router_allowed else "pending"
+        elif voucher and exp and exp > now:
+            entry["status"] = "active" if router_allowed else "pending"
+        elif voucher and exp and exp <= now:
+            entry["status"] = "unauthorized_allowed" if router_allowed else "expired"
+        else:
+            entry["status"] = "unauthorized_allowed" if router_allowed else "unknown"
 
         enriched.append(entry)
 
