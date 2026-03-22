@@ -252,7 +252,7 @@ async def _queue_worker():
                             rules.append({
                                 "mac": mac_upper,
                                 "enableRule": True,
-                                "ippro": "IPV4",
+                                "ippro": "ALL",
                                 "remark": "",
                                 "enableLink": True
                             })
@@ -370,7 +370,7 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
                     rules.append({
                         "mac": mac_upper,
                         "enableRule": True,
-                        "ippro": "IPV4",
+                        "ippro": "ALL",
                         "remark": "",
                         "enableLink": True
                     })
