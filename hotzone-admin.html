@@ -432,7 +432,7 @@ function fmtDate(iso){
   try{return new Date(iso).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}catch(e){return iso}
 }
 
-// --- Activity indicator helpers// Utils
+// --- Activity indicator helpers ---
 function showActivity(msg){
   document.getElementById('adminLayout').style.pointerEvents='none';
   document.getElementById('adminLayout').style.opacity='0.6';
@@ -568,32 +568,36 @@ async function refreshActiveAccess(){
 }
 
 async function blockDev(mac,btn){
-  if(btn){btn.classList.add('loading');btn.textContent='Inazuia...';}
-  showActivity('Inazuia kifaa '+mac+' kwenye router...');
+  if(btn){btn.disabled=true;btn.classList.add('loading');btn.textContent='Inazuia...';}
+  showActivity('⏳ Inazuia kifaa '+mac+' kwenye router... tafadhali subiri');
   try{
-    await fetch(API+'/api/devices/'+encodeURIComponent(mac)+'/block',{method:'POST'});
+    const r=await fetch(API+'/api/devices/'+encodeURIComponent(mac)+'/block',{method:'POST'});
+    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
     toast('🚫 Kifaa kimezuiwa: '+mac,'warn');
-  }catch(e){toast('Imeshindikana kuzuia kifaa','error');}
+  }catch(e){toast('Imeshindikana kuzuia: '+(e.message||'tatizo la mtandao'),'error');}
   finally{hideActivity();refreshCurrentPage();}
 }
+
 async function unblockDev(mac,btn){
-  if(btn){btn.classList.add('loading');btn.textContent='Inafungua...';}
-  showActivity('Inafungua kifaa '+mac+' kwenye router...');
+  if(btn){btn.disabled=true;btn.classList.add('loading');btn.textContent='Inafungua...';}
+  showActivity('⏳ Inafungua kifaa '+mac+' kwenye router... tafadhali subiri');
   try{
-    await fetch(API+'/api/devices/'+encodeURIComponent(mac)+'/unblock',{method:'POST'});
+    const r=await fetch(API+'/api/devices/'+encodeURIComponent(mac)+'/unblock',{method:'POST'});
+    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
     toast('✅ Kifaa kimefunguliwa: '+mac,'info');
-  }catch(e){toast('Imeshindikana kufungua kifaa','error');}
+  }catch(e){toast('Imeshindikana kufungua: '+(e.message||'tatizo la mtandao'),'error');}
   finally{hideActivity();refreshCurrentPage();}
 }
 
 async function quickWhitelist(mac,host,btn){
-  if(btn){btn.classList.add('loading');btn.textContent='...';}
-  showActivity('Inaongeza kifaa kwenye whitelist...');
+  if(btn){btn.disabled=true;btn.classList.add('loading');btn.textContent='...';}
+  showActivity('⏳ Inaongeza kifaa kwenye whitelist... tafadhali subiri');
   try{
     const hostname = host || 'Kifaa (' + mac.substring(12) + ')';
-    await fetch(API+'/api/whitelist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mac:mac,hostname:hostname,label:'Kutoka Devices'})});
+    const r=await fetch(API+'/api/whitelist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mac:mac,hostname:hostname,label:'Kutoka Devices'})});
+    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
     toast('✅ Kifaa kimeongezwa kwenye whitelist: '+mac,'info');
-  }catch(e){toast('Imeshindikana kuongeza kwenye whitelist','error');}
+  }catch(e){toast('Imeshindikana kuongeza: '+(e.message||'tatizo la mtandao'),'error');}
   finally{hideActivity();refreshCurrentPage();}
 }
 
@@ -630,23 +634,26 @@ async function addWhitelist(){
   const label=document.getElementById('wlLabel').value.trim();
   if(!mac||!hostname){toast('MAC na Hostname zinahitajika','error');return;}
   const btn=document.getElementById('addWlBtn');
+  btn.disabled=true;
   btnLoading(btn,true);
-  showActivity('Inaongeza '+mac+' kwenye whitelist...');
+  showActivity('⏳ Inaongeza '+mac+' kwenye whitelist... tafadhali subiri');
   try{
-    await fetch(API+'/api/whitelist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mac,hostname,label})});
+    const r=await fetch(API+'/api/whitelist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mac,hostname,label})});
+    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
     document.getElementById('wlMac').value='';document.getElementById('wlHost').value='';document.getElementById('wlLabel').value='';
     toast('✅ Kifaa kimeongezwa kwenye whitelist: '+mac,'info');
-  }catch(e){toast('Imeshindikana kuongeza kwenye whitelist','error');}
-  finally{btnLoading(btn,false);hideActivity();refreshCurrentPage();}
+  }catch(e){toast('Imeshindikana kuongeza: '+(e.message||'tatizo la mtandao'),'error');}
+  finally{btn.disabled=false;btnLoading(btn,false);hideActivity();refreshCurrentPage();}
 }
 
 async function removeWl(mac,btn){
-  if(btn){btn.classList.add('loading');btn.textContent='Inaondoa...';}
-  showActivity('Inaondoa '+mac+' kutoka whitelist...');
+  if(btn){btn.disabled=true;btn.classList.add('loading');btn.textContent='Inaondoa...';}
+  showActivity('⏳ Inaondoa '+mac+' kutoka whitelist... tafadhali subiri');
   try{
-    await fetch(API+'/api/whitelist/'+encodeURIComponent(mac),{method:'DELETE'});
+    const r=await fetch(API+'/api/whitelist/'+encodeURIComponent(mac),{method:'DELETE'});
+    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
     toast('🗑️ Imeondolewa kutoka whitelist: '+mac,'warn');
-  }catch(e){toast('Imeshindikana kuondoa kutoka whitelist','error');}
+  }catch(e){toast('Imeshindikana kuondoa: '+(e.message||'tatizo la mtandao'),'error');}
   finally{hideActivity();refreshCurrentPage();}
 }
 
@@ -668,8 +675,9 @@ async function loadSettings(){
 
 async function saveSettings(){
   const btn=document.getElementById('saveSettingsBtn');
+  btn.disabled=true;
   btnLoading(btn,true);
-  showActivity('Inahifadhi mipangilio...');
+  showActivity('⏳ Inahifadhi mipangilio... tafadhali subiri');
   const body={
     routerIp:document.getElementById('cfgRouterIp').value,
     routerUser:document.getElementById('cfgRouterUser').value,
@@ -682,10 +690,11 @@ async function saveSettings(){
     wifiSecurity:document.getElementById('cfgWifiSecurity').value
   };
   try{
-    await fetch(API+'/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const r=await fetch(API+'/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
     toast('✅ Mipangilio imehifadhiwa!','info');
-  }catch(e){toast('Imeshindikana kuhifadhi mipangilio','error');}
-  finally{btnLoading(btn,false);hideActivity();}
+  }catch(e){toast('Imeshindikana kuhifadhi: '+(e.message||'tatizo la mtandao'),'error');}
+  finally{btn.disabled=false;btnLoading(btn,false);hideActivity();}
 }
 
 // WebSocket
@@ -817,25 +826,30 @@ async function createVoucherCodes(){
   const duration_hours=parseInt(document.getElementById('vcDuration').value)||24;
   const quantity=parseInt(document.getElementById('vcQty').value)||1;
   const btn=document.getElementById('genCodesBtn');
+  btn.disabled=true;
   btnLoading(btn,true);
+  showActivity('⏳ Inatengeneza voucher codes mpya... tafadhali subiri');
   try{
-    const res=await fetch(API+'/api/voucher-codes',{
+    const r=await fetch(API+'/api/voucher-codes',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({label,amount,duration_hours,quantity})
-    }).then(r=>r.json());
-    toast(`🎫 Created ${res.count} voucher code(s)!`,'info');
+    });
+    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
+    const res=await r.json();
+    toast(`🎫 Voucher codes ${res.count} zimetengenezwa!`,'info');
     loadVoucherCodes();
-  }catch(e){toast('Failed to create codes','error')}
-  finally{btnLoading(btn,false);}
+  }catch(e){toast('Imeshindikana kutengeneza codes: '+(e.message||'tatizo'),'error');}
+  finally{btn.disabled=false;btnLoading(btn,false);hideActivity();}
 }
 
 async function deleteVoucherCode(code, btn){
-  if(btn){btn.classList.add('loading');btn.textContent='Deleting...';}
-  showActivity('Inafuta voucher code '+code+'...');
+  if(btn){btn.disabled=true;btn.classList.add('loading');btn.textContent='Inafuta...';}
+  showActivity('⏳ Inafuta voucher code '+code+'... tafadhali subiri');
   try{
-    await fetch(API+'/api/voucher-codes/'+code,{method:'DELETE'});
-    toast('🗑️ Voucher code deleted','warn');
-  }catch(e){toast('Failed to delete code','error');}
+    const r=await fetch(API+'/api/voucher-codes/'+code,{method:'DELETE'});
+    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
+    toast('🗑️ Voucher code imefutwa: '+code,'warn');
+  }catch(e){toast('Imeshindikana kufuta: '+(e.message||'tatizo'),'error');}
   finally{hideActivity();loadVoucherCodes();}
 }
 
