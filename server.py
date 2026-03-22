@@ -1007,7 +1007,7 @@ async def expiry_enforcer():
 # ---------------------------------------------------------------------------
 
 async def device_monitor():
-    """Run every 2 seconds: scrape devices, enforce blocks, detect spoofs."""
+    """Run every 5 seconds: scrape devices, enforce blocks, detect spoofs."""
     await asyncio.sleep(1)  # Initial delay
     while True:
         try:
@@ -1154,7 +1154,7 @@ async def device_monitor():
         except Exception as e:
             logger.error(f"Device monitor error: {e}")
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
 
 
