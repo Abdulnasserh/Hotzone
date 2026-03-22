@@ -506,14 +506,24 @@ async function refreshDevices(){
   }, 1000);
 
   try{
-    const devs=await fetchRetry(API+'/api/devices').then(r=>r.json());
+    const res=await fetchRetry(API+'/api/devices').then(r=>r.json());
     clearInterval(msgTimer);
+    
+    // Handle server still loading (initial scrape not done)
+    if(res.loading){
+      tb.innerHTML='<tr class="table-loading"><td colspan="6" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div style="font-size:14px;font-weight:600;color:var(--accent)">Mfumo unajiandaa... inatafuta vifaa kwenye router</div><div style="font-size:11px;color:var(--td);margin-top:8px">Tafadhali subiri sekunde chache, utaona vifaa hivi karibuni</div></td></tr>';
+      btnLoading(btn,false);
+      setTimeout(()=>refreshDevices(),5000);
+      return;
+    }
+    
+    const devs=res.devices||res;
     document.getElementById('deviceCount').textContent=devs.length;
     if(!devs.length){tb.innerHTML='<tr><td colspan="6" class="empty">Hakuna vifaa vilivyopatikana ndani ya router.</td></tr>';return;}
     tb.innerHTML=devs.map(d=>`<tr>
       <td>${d.host||'—'}</td><td style="font-size:11px">${d.mac}</td><td>${d.ip}</td>
       <td><span class="badge ${d.status}">${d.status==='unauthorized_allowed'?'IMEUNGANISHWA (LEAK)':d.status}</span></td>
-      <td class="timer">${fmtTime(d.time_remaining)}</td>
+      <td class="timer">${d.status==='active' ? fmtTime(d.time_remaining) : '—'}</td>
       <td>${d.status==='whitelisted'?'<span style="font-size:11px;color:var(--td)">Kimelindwa</span>':d.status==='unauthorized_allowed'?
         `<div style="display:flex;gap:4px">
           <button class="btn sm danger" onclick="blockDev('${d.mac}',this)">🚫 Zuia</button>
@@ -543,7 +553,17 @@ async function refreshActiveAccess(){
   tb.innerHTML='<tr class="table-loading"><td colspan="5" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div style="font-size:14px;font-weight:600;color:var(--accent)">Inasoma vifaa vyenye mtandao...</div></td></tr>';
   
   try{
-    const devs=await fetchRetry(API+'/api/devices').then(r=>r.json());
+    const res=await fetchRetry(API+'/api/devices').then(r=>r.json());
+    
+    // Handle server still loading (initial scrape not done)
+    if(res.loading){
+      tb.innerHTML='<tr class="table-loading"><td colspan="5" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div style="font-size:14px;font-weight:600;color:var(--accent)">Mfumo unajiandaa... inatafuta vifaa kwenye router</div><div style="font-size:11px;color:var(--td);margin-top:8px">Tafadhali subiri sekunde chache</div></td></tr>';
+      btnLoading(btn,false);
+      setTimeout(()=>refreshActiveAccess(),5000);
+      return;
+    }
+    
+    const devs=res.devices||res;
     
     // Filter to officially allowed or unauthorized_allowed devices
     const activeDevs=devs.filter(d=>d.status==='active'||d.status==='whitelisted'||d.status==='unauthorized_allowed');
@@ -573,9 +593,29 @@ async function blockDev(mac,btn){
   try{
     const r=await fetch(API+'/api/devices/'+encodeURIComponent(mac)+'/block',{method:'POST'});
     if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
-    toast('🚫 Kifaa kimezuiwa: '+mac,'warn');
+    // WebSocket events handle the toast, removed duplicate here.
+    // Optimistically update the row so user sees "blocked" + "Fundua" immediately
+    if(btn){
+      const row=btn.closest('tr');
+      if(row){
+        // Update status badge
+        const badge=row.querySelector('.badge');
+        if(badge){badge.className='badge blocked';badge.textContent='blocked';}
+        // Clear timer to prevent ticking when blocked
+        const timerCell=row.querySelector('.timer');
+        if(timerCell){timerCell.textContent='—';}
+        // Replace action buttons with Fundua + Whitelist
+        const actionCell=row.querySelector('td:last-child');
+        if(actionCell){
+          actionCell.innerHTML=`<div style="display:flex;gap:4px">
+            <button class="btn sm" onclick="unblockDev('${mac}',this)">✅ Fungua</button>
+            <button class="btn sm primary" style="background:var(--ag);color:var(--accent);border-color:transparent" onclick="quickWhitelist('${mac}','',this)">🛡️ Whitelist</button>
+          </div>`;
+        }
+      }
+    }
   }catch(e){toast('Imeshindikana kuzuia: '+(e.message||'tatizo la mtandao'),'error');}
-  finally{hideActivity();refreshCurrentPage();}
+  finally{hideActivity();}
 }
 
 async function unblockDev(mac,btn){
@@ -584,7 +624,7 @@ async function unblockDev(mac,btn){
   try{
     const r=await fetch(API+'/api/devices/'+encodeURIComponent(mac)+'/unblock',{method:'POST'});
     if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
-    toast('✅ Kifaa kimefunguliwa: '+mac,'info');
+    // WebSocket events handle the toast, removed duplicate here.
   }catch(e){toast('Imeshindikana kufungua: '+(e.message||'tatizo la mtandao'),'error');}
   finally{hideActivity();refreshCurrentPage();}
 }

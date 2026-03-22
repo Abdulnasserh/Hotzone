@@ -326,15 +326,25 @@ async def my_status(request: Request):
     return {"active": False}
 
 _cached_router_devices = []
+_initial_scrape_done = False
 
 @app.get("/api/devices")
 async def list_devices():
-    global _cached_router_devices
+    global _cached_router_devices, _initial_scrape_done
+    
+    if not _initial_scrape_done:
+        return {"loading": True, "devices": []}
+    
     router_devices = _cached_router_devices
 
     whitelist = get_whitelist()
     vouchers = get_vouchers()
+    devices_store = get_devices_store()
     wl_macs = {w["mac"].upper() for w in whitelist}
+    
+    # Build a lookup of manually blocked MACs from the devices store
+    # This lets the admin's block action take immediate effect in the UI
+    store_status = {ds.get("mac", "").upper(): ds.get("status", "") for ds in devices_store}
 
     now = datetime.now()
     enriched = []
@@ -345,33 +355,38 @@ async def list_devices():
         if mac in wl_macs:
             entry["status"] = "whitelisted"
         else:
-            # Check voucher
-            voucher = None
-            for v in vouchers:
-                if v["mac"].upper() == mac and v["status"] == "active":
-                    voucher = v
-                    break
-
-            if voucher:
-                exp = datetime.fromisoformat(voucher["expires"])
-                if exp > now:
-                    entry["status"] = "active"
-                    entry["expires"] = voucher["expires"]
-                    entry["voucher_id"] = voucher["id"]
-                    remaining = (exp - now).total_seconds()
-                    entry["time_remaining"] = int(remaining)
-                else:
-                    entry["status"] = "expired"
-                    entry["voucher_id"] = voucher["id"]
+            # Check if admin manually blocked this device (takes priority over router state)
+            ds_status = store_status.get(mac, "")
+            if ds_status == "blocked":
+                entry["status"] = "blocked"
             else:
-                if entry.get("router_allowed", False):
-                    entry["status"] = "unauthorized_allowed"
+                # Check voucher
+                voucher = None
+                for v in vouchers:
+                    if v["mac"].upper() == mac and v["status"] == "active":
+                        voucher = v
+                        break
+
+                if voucher:
+                    exp = datetime.fromisoformat(voucher["expires"])
+                    if exp > now:
+                        entry["status"] = "active"
+                        entry["expires"] = voucher["expires"]
+                        entry["voucher_id"] = voucher["id"]
+                        remaining = (exp - now).total_seconds()
+                        entry["time_remaining"] = int(remaining)
+                    else:
+                        entry["status"] = "expired"
+                        entry["voucher_id"] = voucher["id"]
                 else:
-                    entry["status"] = "unknown"
+                    if entry.get("router_allowed", False):
+                        entry["status"] = "unauthorized_allowed"
+                    else:
+                        entry["status"] = "unknown"
 
         enriched.append(entry)
 
-    return enriched
+    return {"loading": False, "devices": enriched}
 
 
 @app.post("/api/devices/{mac}/block")
@@ -402,6 +417,13 @@ async def block_device_route(mac: str):
             break
     save_devices_store(devices_store)
 
+    # Immediately update cached router devices so the UI shows blocked right away
+    # (the actual router operation is queued and will complete in the background)
+    for rd in _cached_router_devices:
+        if rd.get("mac", "").upper() == mac_upper:
+            rd["router_allowed"] = False
+            break
+
     await ws_manager.broadcast({"type": "device_blocked", "mac": mac})
     return {"success": success, "mac": mac}
 
@@ -416,6 +438,21 @@ async def unblock_device_route(mac: str):
     has_active = any(v["mac"].upper() == mac_upper and v["status"] == "active" for v in vouchers)
     
     if not has_active:
+        # Look up the actual hostname from cached router devices or devices store
+        actual_hostname = ""
+        for rd in _cached_router_devices:
+            if rd.get("mac", "").upper() == mac_upper:
+                actual_hostname = rd.get("host", "")
+                break
+        if not actual_hostname:
+            devices_store = get_devices_store()
+            for ds in devices_store:
+                if ds.get("mac", "").upper() == mac_upper:
+                    actual_hostname = ds.get("hostname", "")
+                    break
+        if not actual_hostname:
+            actual_hostname = "Kifaa (" + mac_upper[-5:] + ")"
+
         # Create a 24h manual bypass voucher so the background worker doesn't instantly re-block it!
         expires = now + timedelta(hours=24)
         vid = str(uuid.uuid4())[:8]
@@ -423,7 +460,7 @@ async def unblock_device_route(mac: str):
             "id": vid,
             "reference": "MANUAL-BYPASS",
             "mac": mac_upper,
-            "hostname": "Manual Unblock",
+            "hostname": actual_hostname,
             "ip": "",
             "phone": "ADMIN",
             "amount": 0,
@@ -958,8 +995,11 @@ async def device_monitor():
                 continue
 
             router_devices = await scrape_devices()
-            global _cached_router_devices
+            global _cached_router_devices, _initial_scrape_done
             _cached_router_devices = router_devices
+            if not _initial_scrape_done:
+                _initial_scrape_done = True
+                logger.info("✅ Initial device scrape complete — %d devices found", len(router_devices))
             whitelist = get_whitelist()
             vouchers = get_vouchers()
             devices_store = get_devices_store()
