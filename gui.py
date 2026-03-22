@@ -177,6 +177,9 @@ class ServerGUI(ctk.CTk):
         
         self.server_thread = threading.Thread(target=self.run_uvicorn, daemon=True)
         self.server_thread.start()
+        
+        # Auto-launch Admin Portal after server has had time to bind
+        threading.Timer(2.0, lambda: webbrowser.open("http://127.0.0.1:8000/admin")).start()
 
     def stop_server(self):
         self.start_btn.configure(state="normal")
