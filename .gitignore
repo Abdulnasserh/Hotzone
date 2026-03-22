@@ -1,6 +1,10 @@
-
 __pycache__/
 .venv/
 dist/
 build/
 HotZonePro.spec
+*.pyc
+*.log
+hotzone.db*
+router_api_capture.json
+reverse_engineer.py

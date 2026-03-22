@@ -1,157 +1,113 @@
-# HotZone — WiFi Voucher Hotspot System
+# HotZone Pro — Automated WiFi Voucher System
 
-Automated WiFi voucher system using mobile money (Snippe API) with Playwright-driven router control for Airtel 4G routers.
+An automated, ultra-fast WiFi Hotspot and Voucher system. It uses a **custom reverse-engineered native HTTP API** to directly inject firewall rules into ZTE-based 4G routers (like Airtel CPEs), dropping the internet authorization speed from 15 seconds to under **0.1 seconds**.
 
 ## How It Works
 
-```
+```text
 STEP 1 — Scan to Connect WiFi
   Customer scans QR #1 → Phone auto-joins WiFi network
     ↓
-  Connected to WiFi, but NO internet (not whitelisted)
+  Connected to WiFi, but NO internet (Router firewall blocks them)
 
-STEP 2 — Scan to Pay
-  Customer scans QR #2 → Opens http://<server-ip>:8000
+STEP 2 — Buy a Voucher
+  Customer scans QR #2 or uses a pre-printed Voucher Code
     ↓
-  Enters phone number → Clicks "Pay 1,000 TZS"
+  Server authenticates the payment or verifies the active code
     ↓
-  Snippe sends USSD push → Customer enters PIN
+  **Reverse-Engineered Native API kicks in!**
     ↓
-  Webhook confirms payment → Server finds MAC via router DHCP
+  Python sends `{"cmd": 28}` directly to `/cgi-bin/http.cgi`
     ↓
-  Playwright adds MAC to router whitelist → Customer gets internet!
+  Router applies hardware-level WHITELIST instantly!
     ↓
-  Voucher expires → Playwright removes MAC → Customer loses internet
+  Voucher expires later → Python deletes the rule → Customer loses internet
 ```
 
-## Setup
+## The Reverse-Engineered Router API
+
+Unlike previous versions that relied on a slow, ram-heavy headless browser (Playwright) to click buttons on the router's admin panel, this system speaks the router's internal JSON-RPC language directly.
+
+### Technical API Documentation (ZTE / Airtel 4G CPE)
+*Every request is a POST to `http://192.168.1.1/cgi-bin/http.cgi` with a JSON payload.*
+
+#### 1. Authentication (CMD 232 & 100)
+The router uses a SHA256 challenge-response login system.
+1. **Get Token**: `{"cmd": 232, "method": "GET", "sessionId": "", "language": "en"}`. The router responds with a random `token` string and a temporary `sessionId`.
+2. **Hash Password**: You must generate a hash locally using `SHA256(token + "your_admin_password")`.
+3. **Login**: `{"cmd": 100, "method": "POST", "sessionId": sessionId, "param": {"password": Hash}}`. If successful, your `sessionId` is now firmly authenticated for all future router modifications.
+
+#### 2. Read Connected Devices / DHCP (CMD 113)
+To hunt down exactly who is physically connected to the router right now (their phone's MAC address and IP):
+* **Payload:** `{"method": "GET", "cmd": 113, "sessionId": sessionId}`
+* **Response:** Returns an enormous array of connected users under the `"lan_param"` object block. Example: `[{"mac": "AA:BB...", "ip": "192...", "host": "iPhone"}, ...]`
+
+#### 3. Enforce the Whitelist (CMD 28 & CMD 30)
+To grant or block internet access, you have to rewrite the router's internal MAC filter table.
+1. **Write the Allowed MACs (CMD 28):** 
+   `{"method": "POST", "cmd": 28, "sessionId": sessionId, "param": {"mac_filter_list": "AA:BB:CC:DD:EE:FF,11:22:33:44:55:66"}}`
+   *(All actively paying customer MAC addresses must be joined by a comma)*
+2. **Enforce Whitelist Blocking Mode (CMD 30):** 
+   `{"method": "POST", "cmd": 30, "sessionId": sessionId, "param": {"mode": 1, "acceptAll": false}}`
+   *(Setting `acceptAll: false` acts as a kill-switch, instantly dropping internet access for any MAC address globally that was not included in the CMD 28 string)*
+
+---
+All communication in the HotZone codebase is done natively in Python via `httpx` and queued asynchronously within `router_scraper.py` to prevent crashing the router's fragile low-power CPU.
+
+## Setup & Running
 
 ### 1. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
-playwright install chromium
 ```
+*(No headless browser installation is required anymore!)*
 
-### 2. Configure
-
-Edit `config.json`:
-
-```json
-{
-  "routerIp": "192.168.1.1",
-  "routerUser": "admin",
-  "routerPass": "your_router_password",
-  "playwrightEnabled": true,
-  "serverIp": "192.168.1.162",
-  "snippeApiKey": "your_snippe_api_key",
-  "snippeWebhookSecret": "your_webhook_secret",
-  "dailyMode": "24hrs",
-  "dailyCutoffTime": "22:00",
-  "wifiSSID": "HotZone WiFi",
-  "wifiPassword": "your_wifi_password",
-  "wifiSecurity": "WPA"
-}
-```
-
-**Get your Snippe API key** at [https://snippe.sh](https://snippe.sh)
-
-### 3. Whitelist Your Devices
-
-Edit `whitelist.json` — add your own devices so they're never blocked:
-
-```json
-[
-  { "mac": "60:30:D4:6E:53:10", "hostname": "Abduls-MacBook", "label": "Admin MacBook" }
-]
-```
-
-Find your MAC from the router DHCP list:
-- **Router Gateway**: `http://192.168.1.1/index.html?_t=182891#FW_RULE#0`
-- Navigate to **System Status → DHCP Information → Device List**
-
-### 4. Run the Server
+### 2. Run the Server
 
 ```bash
-python server.py
+python3 server.py
+# Or run with the beautiful CustomTkinter window:
+python3 gui.py
 ```
 
-Server runs on `http://0.0.0.0:8000`
+The server instantly starts up on `http://0.0.0.0:8000` and will automatically pop open the Admin Dashboard in your browser!
 
-### 5. Print QR Code Signs
+### 3. Configure the System
 
-The system generates **two QR codes** — print both on a sign at your location:
+All configuration is managed securely through the **Admin Dashboard** (which saves to a local `hotzone.db` SQLite database).
+Go to the **Mipangilio** (Settings) tab to enter:
+- Your Router's IP and Password
+- Your 4-digit Admin PIN
+- Your WiFi SSID and Password (for printing QR codes)
 
-| QR Code | Purpose | What it does |
-|---------|---------|-------------|
-| **Step 1 — Connect WiFi** | `/api/qr/connect` | Auto-joins the WiFi network (no internet) |
-| **Step 2 — Pay for Internet** | `/api/qr/portal` | Opens the payment page on the local network |
+### 4. Setup your Whitelist
 
-Download both QR codes from the Admin Dashboard → QR Codes page.
+In the **Whitelist** tab, add your personal phone, admin laptop, or Smart TVs. Devices in this list will **never** be blocked by the firewall, ensuring you don't accidentally lock yourself out!
 
-## Pages
+### 5. Print your Signs
 
-| URL | Description |
-|-----|-------------|
-| `http://<ip>:8000/` | Customer payment page |
-| `http://<ip>:8000/admin` | Admin dashboard |
+The system automatically generates beautifully branded QR cards:
+1. **Connect QR:** Customers scan to effortlessly join the WiFi without typing the password.
+2. **Payment Page QR:** Customers scan to buy internet time.
+3. **Voucher Codes:** You can mass-generate 24-hour printable scratch-card codes.
 
-## Files
+## System Architecture
 
 | File | Purpose |
 |------|---------|
-| `server.py` | FastAPI backend — all APIs, WebSocket, background monitor |
-| `router_scraper.py` | Playwright automation — scrape devices, block/unblock MACs |
-| `static/index.html` | Customer-facing mobile payment page |
-| `hotzone-admin.html` | Admin dashboard — devices, vouchers, whitelist, settings |
-| `config.json` | Server and router configuration |
-| `whitelist.json` | Admin devices (never blocked) |
-| `vouchers.json` | Active/expired voucher records |
-| `devices.json` | Device tracking for anti-spoofing |
+| `server.py` | FastAPI backend — handles APIs, WebSockets, background monitoring, and voucher expiry. |
+| `router_scraper.py` | Core Networking — authenticates and fires the `cmd` JSON-RPC payloads to the router's HTTP CGI. |
+| `gui.py` | Optional Cross-platform Desktop App interface for starting/stopping the server. |
+| `hotzone-admin.html` | Beautiful, mobile-responsive Admin Dashboard. |
+| `hotzone.db` | Single-file SQLite database storing all vouchers, whitelists, config, and system logs. |
 
-## API Endpoints
+## Advanced Features
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/pay` | Initiate payment `{ phone }` |
-| GET | `/api/pay/status?reference=` | Poll payment status |
-| POST | `/api/webhooks/snippe` | Snippe webhook receiver |
-| GET | `/api/devices` | List devices with status |
-| POST | `/api/devices/{mac}/block` | Block device |
-| POST | `/api/devices/{mac}/unblock` | Unblock device |
-| GET | `/api/whitelist` | List whitelist |
-| POST | `/api/whitelist` | Add to whitelist |
-| DELETE | `/api/whitelist/{mac}` | Remove from whitelist |
-| GET | `/api/config` | Get config (masked) |
-| POST | `/api/config` | Update config |
-| GET | `/api/vouchers` | List vouchers |
-| GET | `/api/revenue` | Revenue summary |
-| GET | `/api/qr/connect` | WiFi connection QR (Step 1) |
-| GET | `/api/qr/portal` | Payment portal QR (Step 2) |
-| WS | `/ws` | WebSocket live events |
+*   **Offline Tracking**: Active customers who lock their phone screens are temporarily marked as "Offline" rather than completely erased from the dashboard, giving the Admin absolute tracking power.
+*   **Spoof Protection**: The background monitor continuously guards against MAC Spoofing by comparing historical hostnames.
+*   **Concurrency Safe**: Uses Python AsyncIO locks so the backend never drops a packet when multiple people buy vouchers at the exact same millisecond.
 
-## Anti-Spoofing
-
-- **Hostname match, MAC changed** → `suspected_spoof`, kept blocked, admin alerted
-- **MAC match, hostname changed** → Logged, voucher stays valid
-- Background monitor runs every 10 seconds
-
-## Supported Networks
-
-Airtel Money, M-Pesa, Mixx by Yas, Halotel (all Tanzania)
-
-## Day Modes
-
-- **24hrs**: Voucher valid for 24 hours from activation
-- **cutoff**: Voucher expires at fixed time (e.g. 22:00 same day)
-
-## Requirements
-
-- Python 3.10+
-- Chromium (installed via `playwright install chromium`)
-- Airtel 4G router at 192.168.1.1
-- Snippe API account
-
-## Cross-Platform
-
-Works on Windows, macOS, and Linux.
+## Supported Routing Hardware
+- Out of the box: **ZTE-based 4G LTE CPE Routers** (Commonly branded by Airtel, MTN, Vodafone).
+- Any router where the web panel operates via `/cgi-bin/http.cgi` JSON commands.

@@ -139,9 +139,6 @@ class ServerGUI(ctk.CTk):
         self.stop_btn = ctk.CTkButton(frame, text="⏹ Stop Server", fg_color="#EF4444", hover_color="#DC2626", font=ctk.CTkFont(size=16, weight="bold"), height=50, state="disabled", command=self.stop_server)
         self.stop_btn.pack(pady=10)
         
-        self.admin_btn = ctk.CTkButton(frame, text="⚙️ Open Admin Portal", fg_color="#3B82F6", hover_color="#2563EB", font=ctk.CTkFont(size=14, weight="bold"), height=40, state="disabled", command=self.open_admin)
-        self.admin_btn.pack(pady=(5, 10))
-
         self.import_btn = ctk.CTkButton(frame, text="📂 Import Database Backup", fg_color="#8B5CF6", hover_color="#7C3AED", font=ctk.CTkFont(size=13, weight="bold"), height=35, command=self.import_database)
         self.import_btn.pack(pady=(5, 10))
         
@@ -160,9 +157,6 @@ class ServerGUI(ctk.CTk):
             except Exception as e:
                 messagebox.showerror("Import Error", f"Failed to import database: {e}")
 
-    def open_admin(self):
-        webbrowser.open("http://127.0.0.1:8000/admin")
-
     def run_uvicorn(self):
         try:
             from server import app
@@ -178,7 +172,6 @@ class ServerGUI(ctk.CTk):
     def start_server(self):
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
-        self.admin_btn.configure(state="normal")
         self.import_btn.configure(state="disabled")
         self.status_label.configure(text="Server Status: RUNNING", text_color="#10B981")
         
@@ -188,7 +181,6 @@ class ServerGUI(ctk.CTk):
     def stop_server(self):
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
-        self.admin_btn.configure(state="disabled")
         self.import_btn.configure(state="normal")
         self.status_label.configure(text="Server Status: OFFLINE", text_color="#EF4444")
         

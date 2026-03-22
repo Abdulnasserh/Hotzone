@@ -18,7 +18,8 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-
+import webbrowser
+import threading
 import qrcode
 from qrcode.image.styledpil import StyledPilImage
 
@@ -28,7 +29,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from router_scraper import scrape_devices, block_device, unblock_device, sync_whitelist_to_router, purge_unauthorized_macs, cleanup as pw_cleanup
+from router_scraper import scrape_devices, block_device, unblock_device, sync_whitelist_to_router, purge_unauthorized_macs, shutdown_scraper, cleanup as pw_cleanup
 
 import sys
 import os
@@ -173,9 +174,10 @@ async def lifespan(app: FastAPI):
     monitor_task = asyncio.create_task(device_monitor())
     enforcer_task = asyncio.create_task(expiry_enforcer())
     yield
-    logger.info("Shutting down — cleaning up Playwright...")
+    logger.info("Shutting down — cleaning up tasks and connections...")
     monitor_task.cancel()
     enforcer_task.cancel()
+    await shutdown_scraper()
     await pw_cleanup()
 
 # ---------------------------------------------------------------------------
@@ -224,7 +226,8 @@ class ConnectionManager:
             except Exception:
                 dead.append(ws)
         for ws in dead:
-            self.connections.remove(ws)
+            if ws in self.connections:
+                self.connections.remove(ws)
 
 
 ws_manager = ConnectionManager()
@@ -502,6 +505,17 @@ async def add_whitelist(entry: WhitelistEntry):
     # Actually, Playwright calls can take 10-15s, let's run it in the background
     asyncio.create_task(unblock_device(entry.mac))
 
+    # Clear any explicit UI blocks in the devices_store
+    devices_store = get_devices_store()
+    ds_changed = False
+    for ds in devices_store:
+        if ds.get("mac", "").upper() == entry.mac.upper():
+            if ds.get("status") == "blocked":
+                ds["status"] = "active"
+                ds_changed = True
+    if ds_changed:
+        save_devices_store(devices_store)
+        
     # Check if already present
     for w in wl:
         if w["mac"].upper() == entry.mac.upper():
@@ -622,6 +636,15 @@ async def revenue():
         "voucher_count": len(vouchers),
         "active_count": sum(1 for v in vouchers if v.get("status") == "active")
     }
+
+@app.delete("/api/vouchers/reset-revenue")
+async def reset_revenue():
+    """Deletes all 'expired' vouchers to reset revenue counter to 0."""
+    vouchers = get_vouchers()
+    retained_vouchers = [v for v in vouchers if v.get("status") != "expired"]
+    save_vouchers(retained_vouchers)
+    logger.warning(f"Admin manually cleared historical revenue (deleted {len(vouchers) - len(retained_vouchers)} expired vouchers).")
+    return {"status": "success", "message": "Revenue cleared"}
 
 # ---------------------------------------------------------------------------
 # Routes — QR Code Generation
@@ -1145,6 +1168,22 @@ async def device_monitor():
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
+    import signal
     config = get_config()
     server_ip = config.get("serverIp", "0.0.0.0")
+    
+    # Force-kill on Ctrl+C so the process never hangs
+    def _force_exit(sig, frame):
+        print("\n🛑 Server stopped.")
+        os._exit(0)
+    signal.signal(signal.SIGINT, _force_exit)
+    signal.signal(signal.SIGTERM, _force_exit)
+    
+    # Auto-launch the Admin Portal locally when the server starts
+    import webbrowser
+    import threading
+    def _open_admin():
+        webbrowser.open("http://127.0.0.1:8000/admin")
+    threading.Timer(1.5, _open_admin).start()
+    
     uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False, log_level="info")

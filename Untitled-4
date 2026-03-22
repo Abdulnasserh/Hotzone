@@ -1,0 +1,69 @@
+## [Webhook Headers](https://docs.snippe.sh/docs/2026-01-25/webhooks#webhook-headers)
+[Webhook Headers](https://docs.snippe.sh/docs/2026-01-25/webhooks#webhook-headers)
+All webhooks include the following headers:
+
+```
+Content-Type
+```
+
+
+```
+application/json
+```
+
+
+```
+User-Agent
+```
+
+
+```
+Snipe-Webhook/1.0
+```
+
+
+```
+X-Webhook-Event
+```
+
+
+```
+payment.completed
+```
+
+
+```
+X-Webhook-Timestamp
+```
+
+
+```
+X-Webhook-Signature
+```
+
+## [Event Types](https://docs.snippe.sh/docs/2026-01-25/webhooks#event-types)
+[Event Types](https://docs.snippe.sh/docs/2026-01-25/webhooks#event-types)
+| Event | Description | | ----- | ----------- | | payment.completed | Payment successfully completed | | payment.failed | Payment failed or was declined |
+
+```
+payment.completed
+```
+
+
+```
+payment.failed
+```
+
+| Event | Description | | ----- | ----------- | | payout.completed | Payout successfully sent | | payout.failed | Payout failed |
+
+```
+payout.completed
+```
+
+
+```
+payout.failed
+```
+
+## [Payment Events](https://docs.snippe.sh/docs/2026-01-25/webhooks#payment-events)
+[Payment Events](https://docs.snippe.sh/docs/2026-01-25/webhooks#payment-events)

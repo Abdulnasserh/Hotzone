@@ -91,7 +91,11 @@ tr:hover td{background:rgba(108,92,231,.04)}
 @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 @keyframes slideIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
 @keyframes spin{to{transform:rotate(360deg)}}
-@media(max-width:768px){.sidebar{display:none}.main{margin-left:0}}
+@media(max-width:768px){.sidebar{display:none}.main{margin-left:0;padding:16px;padding-bottom:80px}.cards{grid-template-columns:1fr;gap:12px}.bottom-nav{display:flex!important}.table-wrapper{overflow-x:auto;-webkit-overflow-scrolling:touch}table{white-space:nowrap}}
+.bottom-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:var(--s1);border-top:1px solid var(--border);z-index:9999;justify-content:space-around;padding:8px 0;box-shadow:0 -4px 16px rgba(0,0,0,0.2);backdrop-filter:blur(10px)}
+.bottom-nav .nav-item{flex-direction:column;gap:4px;padding:4px;font-size:10px;border-left:none!important;border-bottom:3px solid transparent}
+.bottom-nav .nav-item .icon{font-size:22px;margin-bottom:-2px}
+.bottom-nav .nav-item:hover,.bottom-nav .nav-item.active{background:transparent;border-bottom-color:var(--accent)}
 
 /* Loading states */
 .btn.loading{pointer-events:none;opacity:.6;position:relative}
@@ -192,14 +196,23 @@ tr:hover td{background:rgba(108,92,231,.04)}
 <div class="layout" id="adminLayout" style="display:none">
 <aside class="sidebar">
   <div class="logo">HotZone<span>WiFi Voucher Admin</span></div>
-  <div class="nav-item active" onclick="showPage('dashboard')"><span class="icon">📊</span>Dashibodi</div>
-  <div class="nav-item" onclick="showPage('activeaccess')"><span class="icon">🟢</span>Mtandaoni</div>
-  <div class="nav-item" onclick="showPage('devices')"><span class="icon">📡</span>Vifaa</div>
-  <div class="nav-item" onclick="showPage('vouchers')"><span class="icon">🎫</span>Vouchers</div>
-  <div class="nav-item" onclick="showPage('qrcodes')"><span class="icon">📱</span>QR Codes</div>
-  <div class="nav-item" onclick="showPage('whitelist')"><span class="icon">🛡️</span>Whitelist</div>
-  <div class="nav-item" onclick="showPage('settings')"><span class="icon">⚙️</span>Mipangilio</div>
+  <div class="nav-item active" data-page="dashboard" onclick="showPage('dashboard')"><span class="icon">📊</span>Dashibodi</div>
+  <div class="nav-item" data-page="activeaccess" onclick="showPage('activeaccess')"><span class="icon">🟢</span>Mtandaoni</div>
+  <div class="nav-item" data-page="devices" onclick="showPage('devices')"><span class="icon">📡</span>Vifaa</div>
+  <div class="nav-item" data-page="vouchers" onclick="showPage('vouchers')"><span class="icon">🎫</span>Vouchers</div>
+  <div class="nav-item" data-page="qrcodes" onclick="showPage('qrcodes')"><span class="icon">📱</span>QR Codes</div>
+  <div class="nav-item" data-page="whitelist" onclick="showPage('whitelist')"><span class="icon">🛡️</span>Whitelist</div>
+  <div class="nav-item" data-page="settings" onclick="showPage('settings')"><span class="icon">⚙️</span>Mipangilio</div>
 </aside>
+
+<!-- Mobile Bottom Navigation -->
+<nav class="bottom-nav">
+  <div class="nav-item active" data-page="dashboard" onclick="showPage('dashboard')"><span class="icon">📊</span>Dash</div>
+  <div class="nav-item" data-page="activeaccess" onclick="showPage('activeaccess')"><span class="icon">🟢</span>Mtandaoni</div>
+  <div class="nav-item" data-page="vouchers" onclick="showPage('vouchers')"><span class="icon">🎫</span>Vouchers</div>
+  <div class="nav-item" data-page="qrcodes" onclick="showPage('qrcodes')"><span class="icon">📱</span>QR Codes</div>
+  <div class="nav-item" data-page="settings" onclick="showPage('settings')"><span class="icon">⚙️</span>Mipangilio</div>
+</nav>
 <main class="main">
 <div id="toastContainer"></div>
 <div id="alertBar" class="alert-bar"></div>
@@ -215,31 +228,39 @@ tr:hover td{background:rgba(108,92,231,.04)}
     <div class="card"><div class="label">Vifaa Vilivyounganishwa</div><div class="value" id="deviceCount">0</div></div>
   </div>
   <h2 style="font-size:16px">Vouchers za Hivi Karibuni</h2>
-  <table><thead><tr><th>ID</th><th>Simu</th><th>MAC</th><th>Status</th><th>Muda Uliobaki</th><th>Imeundwa</th></tr></thead>
-  <tbody id="dashVouchers"><tr><td colspan="6" class="empty">Inapakia...</td></tr></tbody></table>
+  <div class="table-wrapper">
+    <table><thead><tr><th>ID</th><th>Simu</th><th>MAC</th><th>Status</th><th>Muda Uliobaki</th><th>Imeundwa</th></tr></thead>
+    <tbody id="dashVouchers"><tr><td colspan="6" class="empty">Inapakia...</td></tr></tbody></table>
+  </div>
 </div>
 
 <!-- Mtandaoni (Active Access) -->
 <div class="page" id="page-activeaccess">
   <h2>Vifaa Vyenye Intaneti Sahivi</h2>
   <div style="margin-bottom:12px"><button class="btn primary" id="refreshActiveBtn" onclick="refreshActiveAccess()">🔄 Onyesha Upya Mtandao</button></div>
-  <table><thead><tr><th>Hostname</th><th>MAC Address</th><th>IP</th><th>Aina ya Ruhusa</th><th>Vitendo</th></tr></thead>
-  <tbody id="activeAccessTable"><tr><td colspan="5" class="empty">Inapakia...</td></tr></tbody></table>
+  <div class="table-wrapper">
+    <table><thead><tr><th>Hostname</th><th>MAC Address</th><th>IP</th><th>Aina ya Ruhusa</th><th>Vitendo</th></tr></thead>
+    <tbody id="activeAccessTable"><tr><td colspan="5" class="empty">Inapakia...</td></tr></tbody></table>
+  </div>
 </div>
 
 <!-- Vifaa -->
 <div class="page" id="page-devices">
   <h2>Vifaa Vilivyo Hai</h2>
   <div style="margin-bottom:12px"><button class="btn" id="refreshBtn" onclick="refreshDevices()">🔄 Onyesha Upya</button></div>
-  <table><thead><tr><th>Hostname</th><th>MAC Address</th><th>IP</th><th>Status</th><th>Muda Uliobaki</th><th>Vitendo</th></tr></thead>
-  <tbody id="devicesTable"><tr><td colspan="6" class="empty">Inapakia...</td></tr></tbody></table>
+  <div class="table-wrapper">
+    <table><thead><tr><th>Hostname</th><th>MAC Address</th><th>IP</th><th>Status</th><th>Muda Uliobaki</th><th>Vitendo</th></tr></thead>
+    <tbody id="devicesTable"><tr><td colspan="6" class="empty">Inapakia...</td></tr></tbody></table>
+  </div>
 </div>
 
 <!-- Vouchers -->
 <div class="page" id="page-vouchers">
   <h2>Vouchers</h2>
-  <table><thead><tr><th>ID</th><th>Simu</th><th>MAC</th><th>Hostname</th><th>Kiasi</th><th>Status</th><th>Muda Uliobaki</th><th>Imeundwa</th></tr></thead>
-  <tbody id="vouchersTable"><tr><td colspan="8" class="empty">Inapakia...</td></tr></tbody></table>
+  <div class="table-wrapper">
+    <table><thead><tr><th>ID</th><th>Simu</th><th>MAC</th><th>Hostname</th><th>Kiasi</th><th>Status</th><th>Muda Uliobaki</th><th>Imeundwa</th></tr></thead>
+    <tbody id="vouchersTable"><tr><td colspan="8" class="empty">Inapakia...</td></tr></tbody></table>
+  </div>
 </div>
 
 <!-- Whitelist -->
@@ -252,8 +273,10 @@ tr:hover td{background:rgba(108,92,231,.04)}
     <input id="wlLabel" placeholder="Jina (si lazima)">
     <button class="btn primary" id="addWlBtn" onclick="addWhitelist()">Ongeza Kifaa</button>
   </div>
-  <table><thead><tr><th>MAC Address</th><th>Hostname</th><th>Jina</th><th>Vitendo</th></tr></thead>
-  <tbody id="whitelistTable"><tr><td colspan="4" class="empty">Inapakia...</td></tr></tbody></table>
+  <div class="table-wrapper">
+    <table><thead><tr><th>MAC Address</th><th>Hostname</th><th>Jina</th><th>Vitendo</th></tr></thead>
+    <tbody id="whitelistTable"><tr><td colspan="4" class="empty">Inapakia...</td></tr></tbody></table>
+  </div>
 </div>
 
 <!-- QR Codes na Voucher Codes -->
@@ -309,7 +332,10 @@ tr:hover td{background:rgba(108,92,231,.04)}
       <div class="form-row"><div class="form-group"><label>WiFi Password</label><input id="cfgWifiPassword" type="password"></div>
       <div class="form-group"><label>Security</label><select id="cfgWifiSecurity"><option value="WPA">WPA/WPA2</option><option value="WEP">WEP</option><option value="nopass">Wazi (Bila Password)</option></select></div></div>
     </div>
-    <button class="btn primary" id="saveSettingsBtn" onclick="saveSettings()">Hifadhi Mipangilio</button>
+    <div style="display:flex;gap:12px;margin-top:16px">
+      <button class="btn primary" id="saveSettingsBtn" onclick="saveSettings()">Hifadhi Mipangilio</button>
+      <button class="btn danger" id="resetRevenueBtn" onclick="resetRevenue()">🗑️ Futa Rekodi za Mapato (Reset)</button>
+    </div>
   </div>
 </div>
 </main>
@@ -396,10 +422,11 @@ function unlockAdmin(){
 
 function showPage(id){
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>{
+    n.classList.remove('active');
+    if(n.getAttribute('data-page')===id)n.classList.add('active');
+  });
   document.getElementById('page-'+id).classList.add('active');
-  const pages=['dashboard','activeaccess','devices','vouchers','qrcodes','whitelist','settings'];
-  document.querySelectorAll('.nav-item')[pages.indexOf(id)].classList.add('active');
   sessionStorage.setItem('hz_active_page', id);
   refreshCurrentPage();
 }
@@ -737,6 +764,20 @@ async function saveSettings(){
     toast('✅ Mipangilio imehifadhiwa!','info');
   }catch(e){toast('Imeshindikana kuhifadhi: '+(e.message||'tatizo la mtandao'),'error');}
   finally{btn.disabled=false;btnLoading(btn,false);hideActivity();}
+}
+
+// Reset Revenue
+async function resetRevenue(){
+  if(!confirm("Una uhakika unataka kufuta rekodi ZOTE za mapato?\n\nVouchers zilizokwisha muda wake zitaondolewa kwenye mfumo na mapato yatasoma 0 TZS. Vouchers zinazotumika sasa hivi HAZITAATHIRIKA.\n\nKitendo hiki hakiwezi kutenguliwa!")) return;
+  const btn=document.getElementById('resetRevenueBtn');
+  if(btn){btn.disabled=true;btnLoading(btn,true);}
+  showActivity('⏳ Inafuta rekodi za mapato... tafadhali subiri');
+  try{
+    const r=await fetch(API+'/api/vouchers/reset-revenue',{method:'DELETE'});
+    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
+    toast('✅ Rekodi za mapato zimefutwa kikamilifu!','success');
+  }catch(e){toast('Imeshindikana kufuta: '+(e.message||'tatizo la mtandao'),'error');}
+  finally{if(btn){btn.disabled=false;btnLoading(btn,false);}hideActivity();refreshCurrentPage();}
 }
 
 // WebSocket
