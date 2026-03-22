@@ -25,74 +25,16 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller customtkinter
         
-    - name: Install Playwright Browsers
-      run: |
-        playwright install chromium
-        
-    - name: Resolve Playwright paths
-      id: pw_paths
-      shell: powershell
-      run: |
-        # Get the Playwright driver directory
-        $pw_driver = python -c "import playwright, os; print(os.path.join(os.path.dirname(playwright.__file__), 'driver'))"
-        echo "PW_DRIVER=$pw_driver" >> $env:GITHUB_OUTPUT
-        echo "Playwright driver: $pw_driver"
-        
-        # Get the browser cache directory (Windows: %LOCALAPPDATA%\ms-playwright)
-        $browsers_cache = "$env:LOCALAPPDATA\ms-playwright"
-        echo "Browser cache: $browsers_cache"
-        
-        # List ALL browser directories for diagnostics
-        Get-ChildItem -Path $browsers_cache -Directory | ForEach-Object { echo "  Found: $($_.Name)" }
-        
-        # Collect all chromium directories (full + headless shell)
-        $all_dirs = Get-ChildItem -Path $browsers_cache -Filter "chromium*" -Directory
-        
-        if ($all_dirs.Count -eq 0) {
-          Write-Error "Could not find any chromium directories in $browsers_cache"
-          exit 1
-        }
-        
-        # Build semicolon-separated list of "source|destname" pairs
-        $pairs = @()
-        foreach ($dir in $all_dirs) {
-          $pairs += "$($dir.FullName)|$($dir.Name)"
-          echo "Will bundle: $($dir.Name) from $($dir.FullName)"
-        }
-        $pairsStr = $pairs -join ";"
-        echo "BROWSER_PAIRS=$pairsStr" >> $env:GITHUB_OUTPUT
-        
     - name: Build with PyInstaller
       shell: powershell
       run: |
-        $pw_driver = "${{ steps.pw_paths.outputs.PW_DRIVER }}"
-        $pairsStr = "${{ steps.pw_paths.outputs.BROWSER_PAIRS }}"
-        
-        # Start building the pyinstaller command with base args
-        $pyiArgs = @(
-          "--noconfirm", "--onedir", "--windowed",
-          "--name", "HotZonePro",
-          "--icon=hotzone.ico",
-          "--add-data", "static;static",
-          "--add-data", "hotzone-admin.html;.",
-          "--add-data", "${pw_driver};playwright\driver"
-        )
-        
-        # Add each browser directory
-        foreach ($pair in $pairsStr.Split(";")) {
-          $parts = $pair.Split("|")
-          $src = $parts[0]
-          $name = $parts[1]
-          $dest = "playwright\driver\package\.local-browsers\$name"
-          $pyiArgs += "--add-data"
-          $pyiArgs += "${src};${dest}"
-          echo "Adding browser: $name -> $dest"
-        }
-        
-        $pyiArgs += "gui.py"
-        
-        echo "Running: pyinstaller $($pyiArgs -join ' ')"
-        & pyinstaller @pyiArgs
+        pyinstaller `
+          --noconfirm --onedir --windowed `
+          --name HotZonePro `
+          --icon=hotzone.ico `
+          --add-data "static;static" `
+          --add-data "hotzone-admin.html;." `
+          gui.py
           
     - name: Compile Windows Installer (Inno Setup)
       shell: pwsh
@@ -115,3 +57,4 @@ jobs:
       with:
         name: HotZonePro-Setup
         path: Output/HotZonePro_Setup.exe
+

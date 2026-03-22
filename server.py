@@ -2,7 +2,7 @@
 server.py — FastAPI WiFi Hotspot Voucher Server
 Core flow:
   Customer connects → scans QR → enters phone → pays via Snippe USSD →
-  webhook confirms → Playwright unblocks MAC → customer gets internet →
+  webhook confirms → Native API unblocks MAC → customer gets internet →
   expiry timer re-blocks MAC automatically.
 """
 
@@ -246,7 +246,6 @@ class ConfigUpdate(BaseModel):
     routerIp: str | None = None
     routerUser: str | None = None
     routerPass: str | None = None
-    playwrightEnabled: bool | None = None
     serverIp: str | None = None
     wifiSSID: str | None = None
     wifiPassword: str | None = None
@@ -501,8 +500,7 @@ async def add_whitelist(entry: WhitelistEntry):
     wl = get_whitelist()
     
     # Actively unblock on the router
-    # Run synchronously to not block the request for too long, or asyncio.create_task
-    # Actually, Playwright calls can take 10-15s, let's run it in the background
+    # Run in the background so the HTTP response returns instantly
     asyncio.create_task(unblock_device(entry.mac))
 
     # Clear any explicit UI blocks in the devices_store
@@ -1014,9 +1012,6 @@ async def device_monitor():
     while True:
         try:
             config = get_config()
-            if not config.get("playwrightEnabled", True):
-                await asyncio.sleep(10)
-                continue
 
             router_devices = await scrape_devices()
             global _cached_router_devices, _initial_scrape_done

@@ -104,8 +104,6 @@ async def _ensure_logged_in(client, config):
 async def scrape_devices() -> list[dict]:
     global _session_id
     config = _load_config()
-    if not config.get("playwrightEnabled", True):
-        return []
 
     router_ip = config.get("routerIp", "192.168.1.1")
     client = get_client(router_ip)
@@ -209,8 +207,6 @@ async def _queue_worker():
             continue
 
         config = _load_config()
-        if not config.get("playwrightEnabled", True):
-            continue
 
         router_ip = config.get("routerIp", "192.168.1.1")
         client = get_client(router_ip)
@@ -327,8 +323,6 @@ async def unblock_device(mac: str) -> bool:
 async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
     global _session_id
     config = _load_config()
-    if not config.get("playwrightEnabled", True):
-        return False
 
     if not whitelist:
         return True
@@ -401,8 +395,6 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
 async def purge_unauthorized_macs(allowed_macs: set) -> bool:
     global _session_id
     config = _load_config()
-    if not config.get("playwrightEnabled", True):
-        return False
 
     router_ip = config.get("routerIp", "192.168.1.1")
     client = get_client(router_ip)
