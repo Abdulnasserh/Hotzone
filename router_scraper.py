@@ -298,10 +298,11 @@ async def _queue_worker():
                 logger.error(f"Batch API attempt {attempt}/3 failed: {e}")
                 _session_id = None
                 if attempt < 3:
-                    _pending_adds.update(adds)
-                    _pending_deletes.update(deletes)
                     await asyncio.sleep(2 * attempt)
                 else:
+                    # After giving up, we put them back and set the event so they get retried eventually.
+                    _pending_adds.update(adds)
+                    _pending_deletes.update(deletes)
                     logger.error(f"Batch API gave up after 3 attempts. Adds:{adds} Deletes:{deletes}")
 
 
@@ -323,9 +324,6 @@ async def unblock_device(mac: str) -> bool:
 async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
     global _session_id
     config = _load_config()
-
-    if not whitelist:
-        return True
 
     router_ip = config.get("routerIp", "192.168.1.1")
     client = get_client(router_ip)

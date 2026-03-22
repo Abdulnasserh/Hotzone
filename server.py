@@ -164,10 +164,9 @@ async def lifespan(app: FastAPI):
         # Step 1: Remove any unauthorized MACs from the router
         await purge_unauthorized_macs(allowed)
 
-        # Step 2: Add any missing permitted MACs
-        if whitelist:
-            logger.info(f"Syncing {len(whitelist)} whitelisted devices to router...")
-            await sync_whitelist_to_router(whitelist)
+        # Step 2: Ensure router is in Whitelist mode & add permitted MACs
+        logger.info(f"Syncing {len(whitelist)} whitelisted devices to router...")
+        await sync_whitelist_to_router(whitelist)
 
     asyncio.create_task(_startup_reconcile())
 
