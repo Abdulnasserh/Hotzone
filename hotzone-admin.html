@@ -399,13 +399,18 @@ function showPage(id){
   const pages=['dashboard','activeaccess','devices','vouchers','qrcodes','whitelist','settings'];
   document.querySelectorAll('.nav-item')[pages.indexOf(id)].classList.add('active');
   sessionStorage.setItem('hz_active_page', id);
-  if(id==='dashboard')loadDashboard();
-  if(id==='activeaccess')refreshActiveAccess();
-  if(id==='devices')refreshDevices();
-  if(id==='vouchers')loadVouchers();
-  if(id==='qrcodes')loadVoucherCodes();
-  if(id==='whitelist')loadWhitelist();
-  if(id==='settings')loadSettings();
+  refreshCurrentPage();
+}
+
+function refreshCurrentPage(){
+  const p = sessionStorage.getItem('hz_active_page') || 'dashboard';
+  if(p==='dashboard')loadDashboard();
+  if(p==='activeaccess')refreshActiveAccess();
+  if(p==='devices')refreshDevices();
+  if(p==='vouchers')loadVouchers();
+  if(p==='qrcodes')loadVoucherCodes();
+  if(p==='whitelist')loadWhitelist();
+  if(p==='settings')loadSettings();
 }
 
 function toast(msg,type='info'){
@@ -427,13 +432,19 @@ function fmtDate(iso){
   try{return new Date(iso).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}catch(e){return iso}
 }
 
-// --- Activity indicator helpers ---
+// --- Activity indicator helpers// Utils
 function showActivity(msg){
-  const bar=document.getElementById('activityBar');
+  document.getElementById('adminLayout').style.pointerEvents='none';
+  document.getElementById('adminLayout').style.opacity='0.6';
+  const b=document.getElementById('activityBar');
   document.getElementById('activityText').textContent=msg;
-  bar.classList.remove('hidden');
+  b.classList.remove('hidden');
 }
-function hideActivity(){document.getElementById('activityBar').classList.add('hidden');}
+function hideActivity(){
+  document.getElementById('adminLayout').style.pointerEvents='';
+  document.getElementById('adminLayout').style.opacity='';
+  document.getElementById('activityBar').classList.add('hidden');
+}
 function btnLoading(btn,loading,origText){
   if(!btn)return;
   if(loading){btn.classList.add('loading');if(origText)btn.textContent=origText;}
@@ -563,7 +574,7 @@ async function blockDev(mac,btn){
     await fetch(API+'/api/devices/'+encodeURIComponent(mac)+'/block',{method:'POST'});
     toast('🚫 Kifaa kimezuiwa: '+mac,'warn');
   }catch(e){toast('Imeshindikana kuzuia kifaa','error');}
-  finally{hideActivity();refreshDevices();}
+  finally{hideActivity();refreshCurrentPage();}
 }
 async function unblockDev(mac,btn){
   if(btn){btn.classList.add('loading');btn.textContent='Inafungua...';}
@@ -572,7 +583,7 @@ async function unblockDev(mac,btn){
     await fetch(API+'/api/devices/'+encodeURIComponent(mac)+'/unblock',{method:'POST'});
     toast('✅ Kifaa kimefunguliwa: '+mac,'info');
   }catch(e){toast('Imeshindikana kufungua kifaa','error');}
-  finally{hideActivity();refreshDevices();}
+  finally{hideActivity();refreshCurrentPage();}
 }
 
 async function quickWhitelist(mac,host,btn){
@@ -583,7 +594,7 @@ async function quickWhitelist(mac,host,btn){
     await fetch(API+'/api/whitelist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mac:mac,hostname:hostname,label:'Kutoka Devices'})});
     toast('✅ Kifaa kimeongezwa kwenye whitelist: '+mac,'info');
   }catch(e){toast('Imeshindikana kuongeza kwenye whitelist','error');}
-  finally{hideActivity();refreshDevices();}
+  finally{hideActivity();refreshCurrentPage();}
 }
 
 // Vouchers
@@ -626,7 +637,7 @@ async function addWhitelist(){
     document.getElementById('wlMac').value='';document.getElementById('wlHost').value='';document.getElementById('wlLabel').value='';
     toast('✅ Kifaa kimeongezwa kwenye whitelist: '+mac,'info');
   }catch(e){toast('Imeshindikana kuongeza kwenye whitelist','error');}
-  finally{btnLoading(btn,false);hideActivity();loadWhitelist();}
+  finally{btnLoading(btn,false);hideActivity();refreshCurrentPage();}
 }
 
 async function removeWl(mac,btn){
@@ -636,7 +647,7 @@ async function removeWl(mac,btn){
     await fetch(API+'/api/whitelist/'+encodeURIComponent(mac),{method:'DELETE'});
     toast('🗑️ Imeondolewa kutoka whitelist: '+mac,'warn');
   }catch(e){toast('Imeshindikana kuondoa kutoka whitelist','error');}
-  finally{hideActivity();loadWhitelist();}
+  finally{hideActivity();refreshCurrentPage();}
 }
 
 // Settings
