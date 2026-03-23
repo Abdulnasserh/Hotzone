@@ -622,7 +622,7 @@ async function blockDev(mac,btn){
   try{
     const r=await fetch(API+'/api/devices/'+encodeURIComponent(mac)+'/block',{method:'POST'});
     if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
-    // WebSocket events handle the toast, removed duplicate here.
+    toast('🚫 Kifaa kimezuiwa: '+mac,'warn');
     // Optimistically update the row so user sees "blocked" + "Fundua" immediately
     if(btn){
       const row=btn.closest('tr');
@@ -653,7 +653,7 @@ async function unblockDev(mac,btn){
   try{
     const r=await fetch(API+'/api/devices/'+encodeURIComponent(mac)+'/unblock',{method:'POST'});
     if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
-    // WebSocket events handle the toast, removed duplicate here.
+    toast('✅ Kifaa kimefunguliwa: '+mac,'info');
   }catch(e){toast('Imeshindikana kufungua: '+(e.message||'tatizo la mtandao'),'error');}
   finally{hideActivity();refreshCurrentPage();}
 }
@@ -788,10 +788,7 @@ function connectWS(){
     try{
       const m=JSON.parse(e.data);
       if(m.type==='devices_update'){refreshDevices();loadDashboard();}
-      if(m.type==='device_blocked')toast('🚫 Kifaa kimezuiwa: '+m.mac,'warn');
-      if(m.type==='device_unblocked')toast('✅ Kifaa kimefunguliwa: '+(m.mac||''),'info');
       if(m.type==='device_spoofed')toast('⚠️ SPOOF IMEGUNDULIWA: '+m.hostname+' MAC imebadilika kuwa '+m.new_mac,'error');
-      if(m.type==='new_device')toast('📡 Kifaa kipya: '+m.hostname+' ('+m.mac+')','info');
       if(m.type==='payment_completed')toast('💰 Malipo yamepokelewa! Ref: '+m.reference,'info');
       if(m.type==='whitelist_updated')loadWhitelist();
     }catch(x){}
