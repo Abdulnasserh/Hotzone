@@ -788,7 +788,6 @@ function connectWS(){
     try{
       const m=JSON.parse(e.data);
       if(m.type==='devices_update'){refreshDevices();loadDashboard();}
-      if(m.type==='device_spoofed')toast('⚠️ SPOOF IMEGUNDULIWA: '+m.hostname+' MAC imebadilika kuwa '+m.new_mac,'error');
       if(m.type==='payment_completed')toast('💰 Malipo yamepokelewa! Ref: '+m.reference,'info');
       if(m.type==='whitelist_updated')loadWhitelist();
     }catch(x){}
