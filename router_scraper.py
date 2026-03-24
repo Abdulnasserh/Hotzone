@@ -155,7 +155,7 @@ async def scrape_devices() -> list[dict]:
             for mac in allowed_macs:
                 if mac not in dhcp_macs:
                     devices.append({
-                        "host": "Offline",
+                        "host": "—",
                         "mac": mac,
                         "ip": "—",
                         "router_allowed": True

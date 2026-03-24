@@ -86,6 +86,7 @@ def _get_db():
         CREATE TABLE IF NOT EXISTS vouchers (id TEXT PRIMARY KEY, reference TEXT, mac TEXT, hostname TEXT, ip TEXT, phone TEXT, amount INTEGER, currency TEXT, status TEXT, created TEXT, expires TEXT);
         CREATE TABLE IF NOT EXISTS devices (mac TEXT PRIMARY KEY, hostname TEXT, ip TEXT, status TEXT, voucher_id TEXT, expires TEXT);
         CREATE TABLE IF NOT EXISTS voucher_codes (code TEXT PRIMARY KEY, label TEXT, amount INTEGER, duration_hours INTEGER, status TEXT, created TEXT, used_by TEXT, used_at TEXT, qr_url TEXT);
+        CREATE TABLE IF NOT EXISTS device_nicknames (mac TEXT PRIMARY KEY, nickname TEXT);
         ''')
     return _db_local.conn
 
@@ -136,6 +137,26 @@ def save_devices_store(dlist: list):
                              [(i.get("mac"),i.get("hostname"),i.get("ip"),i.get("status"),i.get("voucher_id"),i.get("expires")) for i in dlist])
     except Exception: pass
 
+def get_nicknames() -> dict:
+    """Return {MAC_UPPER: nickname} mapping."""
+    try:
+        with _get_db() as conn:
+            return {r[0].upper(): r[1] for r in conn.execute("SELECT mac, nickname FROM device_nicknames").fetchall()}
+    except Exception:
+        return {}
+
+def save_nickname(mac: str, nickname: str):
+    try:
+        with _get_db() as conn:
+            conn.execute("INSERT OR REPLACE INTO device_nicknames (mac, nickname) VALUES (?, ?)", (mac.upper(), nickname))
+    except Exception: pass
+
+def delete_nickname(mac: str):
+    try:
+        with _get_db() as conn:
+            conn.execute("DELETE FROM device_nicknames WHERE mac = ?", (mac.upper(),))
+    except Exception: pass
+
 # ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
@@ -165,8 +186,17 @@ async def lifespan(app: FastAPI):
         await purge_unauthorized_macs(allowed)
 
         # Step 2: Ensure router is in Whitelist mode & add permitted MACs
-        logger.info(f"Syncing {len(whitelist)} whitelisted devices to router...")
-        await sync_whitelist_to_router(whitelist)
+        logger.info("Syncing allowed devices (whitelist + active vouchers) to router...")
+        
+        combined_whitelist = []
+        for w in whitelist:
+            combined_whitelist.append(w)
+            
+        for mac in active_voucher_macs:
+            if mac not in wl_macs:
+                combined_whitelist.append({"mac": mac, "hostname": "Voucher Session", "label": "Active Voucher"})
+                
+        await sync_whitelist_to_router(combined_whitelist)
 
     asyncio.create_task(_startup_reconcile())
 
@@ -250,6 +280,8 @@ class ConfigUpdate(BaseModel):
     wifiPassword: str | None = None
     wifiSecurity: str | None = None
     adminPin: str | None = None
+    dailyCutoff: str | None = None  # e.g. "08:00" — all vouchers expire at this time daily
+    unblockPrice: int | None = None # Price for manual unblocking (default 1000)
 
 class PinRequest(BaseModel):
     pin: str
@@ -342,6 +374,7 @@ async def list_devices():
     whitelist = get_whitelist()
     vouchers = get_vouchers()
     devices_store = get_devices_store()
+    nicknames = get_nicknames()
     wl_macs = {w["mac"].upper() for w in whitelist}
     
     # Build a lookup of manually blocked MACs from the devices store
@@ -353,6 +386,10 @@ async def list_devices():
     for d in router_devices:
         mac = d["mac"].upper()
         entry = {**d, "mac": mac}
+
+        # Inject nickname if exists
+        if mac in nicknames:
+            entry["nickname"] = nicknames[mac]
 
         router_allowed = entry.get("router_allowed", False)
         is_wl = mac in wl_macs
@@ -457,7 +494,25 @@ async def unblock_device_route(mac: str):
 
         # Create a 24h manual bypass voucher so the background worker doesn't instantly re-block it!
         expires = now + timedelta(hours=24)
+        
+        # Adjust default time according to daily cutoff if configured
+        config = get_config()
+        cutoff = config.get("dailyCutoff", "")
+        if cutoff:
+            try:
+                ch, cm = map(int, cutoff.split(":"))
+                next_cutoff = now.replace(hour=ch, minute=cm, second=0, microsecond=0)
+                if next_cutoff <= now:
+                    next_cutoff += timedelta(days=1)
+                if expires > next_cutoff:
+                    expires = next_cutoff
+            except Exception:
+                pass
+
         vid = str(uuid.uuid4())[:8]
+        config = get_config()
+        price = int(config.get("unblockPrice", 1000))
+
         vouchers.append({
             "id": vid,
             "reference": "MANUAL-BYPASS",
@@ -465,7 +520,7 @@ async def unblock_device_route(mac: str):
             "hostname": actual_hostname,
             "ip": "",
             "phone": "ADMIN",
-            "amount": 0,
+            "amount": price,
             "currency": "TZS",
             "status": "active",
             "created": now.isoformat(),
@@ -486,12 +541,45 @@ async def unblock_device_route(mac: str):
     return {"success": success, "mac": mac}
 
 # ---------------------------------------------------------------------------
+# Routes — Device Nicknames (custom names for MACs)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/device-nicknames")
+async def get_all_nicknames():
+    return get_nicknames()
+
+class NicknameRequest(BaseModel):
+    nickname: str
+
+@app.post("/api/device-nicknames/{mac}")
+async def set_device_nickname(mac: str, req: NicknameRequest):
+    nickname = req.nickname.strip()
+    if not nickname:
+        delete_nickname(mac)
+        return {"status": "removed", "mac": mac.upper()}
+    save_nickname(mac, nickname)
+    await ws_manager.broadcast({"type": "nicknames_updated"})
+    return {"status": "saved", "mac": mac.upper(), "nickname": nickname}
+
+@app.delete("/api/device-nicknames/{mac}")
+async def remove_device_nickname(mac: str):
+    delete_nickname(mac)
+    await ws_manager.broadcast({"type": "nicknames_updated"})
+    return {"status": "removed", "mac": mac.upper()}
+
+# ---------------------------------------------------------------------------
 # Routes — Whitelist
 # ---------------------------------------------------------------------------
 
 @app.get("/api/whitelist")
 async def get_whitelist_route():
-    return get_whitelist()
+    wl = get_whitelist()
+    nick = get_nicknames()
+    for w in wl:
+        m = w["mac"].upper()
+        if m in nick:
+            w["nickname"] = nick[m]
+    return wl
 
 
 @app.post("/api/whitelist")
@@ -524,6 +612,12 @@ async def add_whitelist(entry: WhitelistEntry):
                     conn.executemany("INSERT INTO whitelist (mac, hostname, label) VALUES (?, ?, ?)", 
                              [(i.get("mac",""), i.get("hostname",""), i.get("label","")) for i in wl])
             except Exception: pass
+            
+            # Also sync the hostname to the global nickname system
+            if entry.hostname:
+                save_nickname(entry.mac.upper(), entry.hostname)
+                asyncio.create_task(ws_manager.broadcast({"type": "nicknames_updated"}))
+
             return {"status": "updated", "entry": w}
 
     new_entry = {"mac": entry.mac.upper(), "hostname": entry.hostname, "label": entry.label}
@@ -534,6 +628,12 @@ async def add_whitelist(entry: WhitelistEntry):
             conn.executemany("INSERT INTO whitelist (mac, hostname, label) VALUES (?, ?, ?)", 
                              [(i.get("mac",""), i.get("hostname",""), i.get("label","")) for i in wl])
     except Exception: pass
+    
+    # Also sync the hostname to the global nickname system
+    if entry.hostname:
+        save_nickname(entry.mac.upper(), entry.hostname)
+        asyncio.create_task(ws_manager.broadcast({"type": "nicknames_updated"}))
+
     await ws_manager.broadcast({"type": "whitelist_updated", "whitelist": wl})
     return {"status": "added", "entry": new_entry}
 
@@ -618,20 +718,76 @@ async def revenue():
     vouchers = get_vouchers()
     now = datetime.now()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=now.weekday())  # Monday
+    month_start = today_start.replace(day=1)
 
-    total_all = sum(v.get("amount", 0) for v in vouchers if v.get("status") in ("active", "expired"))
+    paid_vouchers = [v for v in vouchers if v.get("status") in ("active", "expired") and v.get("amount", 0) > 0]
+
+    total_all = sum(v.get("amount", 0) for v in paid_vouchers)
     total_today = sum(
-        v.get("amount", 0) for v in vouchers
-        if v.get("status") in ("active", "expired")
-        and datetime.fromisoformat(v["created"]) >= today_start
+        v.get("amount", 0) for v in paid_vouchers
+        if datetime.fromisoformat(v["created"]) >= today_start
     )
+    total_week = sum(
+        v.get("amount", 0) for v in paid_vouchers
+        if datetime.fromisoformat(v["created"]) >= week_start
+    )
+    total_month = sum(
+        v.get("amount", 0) for v in paid_vouchers
+        if datetime.fromisoformat(v["created"]) >= month_start
+    )
+
+    # Peak hours — count vouchers created per hour (0-23) for today
+    peak_hours = [0] * 24
+    for v in paid_vouchers:
+        try:
+            created = datetime.fromisoformat(v["created"])
+            if created >= today_start:
+                peak_hours[created.hour] += 1
+        except (KeyError, ValueError):
+            pass
+
+    # Daily revenue for last 7 days
+    daily_revenue = []
+    for i in range(6, -1, -1):
+        day = today_start - timedelta(days=i)
+        day_end = day + timedelta(days=1)
+        day_total = sum(
+            v.get("amount", 0) for v in paid_vouchers
+            if day <= datetime.fromisoformat(v["created"]) < day_end
+        )
+        daily_revenue.append({
+            "date": day.strftime("%a"),
+            "date_full": day.strftime("%Y-%m-%d"),
+            "amount": day_total
+        })
+
+    # Cutoff time info
+    config = get_config()
+    cutoff = config.get("dailyCutoff", "")
+    next_cutoff_str = ""
+    if cutoff:
+        try:
+            ch, cm = map(int, cutoff.split(":"))
+            next_cutoff = now.replace(hour=ch, minute=cm, second=0, microsecond=0)
+            if next_cutoff <= now:
+                next_cutoff += timedelta(days=1)
+            next_cutoff_str = next_cutoff.isoformat()
+        except Exception:
+            pass
 
     return {
         "today": total_today,
+        "week": total_week,
+        "month": total_month,
         "all_time": total_all,
         "currency": "TZS",
         "voucher_count": len(vouchers),
-        "active_count": sum(1 for v in vouchers if v.get("status") == "active")
+        "active_count": sum(1 for v in vouchers if v.get("status") == "active"),
+        "peak_hours": peak_hours,
+        "daily_revenue": daily_revenue,
+        "daily_cutoff": cutoff,
+        "next_cutoff": next_cutoff_str
     }
 
 @app.delete("/api/vouchers/reset-revenue")
@@ -642,6 +798,98 @@ async def reset_revenue():
     save_vouchers(retained_vouchers)
     logger.warning(f"Admin manually cleared historical revenue (deleted {len(vouchers) - len(retained_vouchers)} expired vouchers).")
     return {"status": "success", "message": "Revenue cleared"}
+
+# ---------------------------------------------------------------------------
+# Routes — Customer Analytics
+# ---------------------------------------------------------------------------
+
+@app.get("/api/analytics/customers")
+async def customer_analytics():
+    """Aggregate voucher purchases per MAC. Categorize as high/medium/low usage."""
+    vouchers = get_vouchers()
+    devices_store = get_devices_store()
+    
+    # Build hostname lookup from devices_store + cached router devices
+    hostname_map = {}
+    for ds in devices_store:
+        mac = ds.get("mac", "").upper()
+        hostname_map[mac] = ds.get("hostname", "")
+    for rd in _cached_router_devices:
+        mac = rd.get("mac", "").upper()
+        if mac not in hostname_map or not hostname_map[mac]:
+            hostname_map[mac] = rd.get("host", "")
+    
+    # Only count paid vouchers (amount > 0, exclude manual bypass)
+    paid = [v for v in vouchers if v.get("amount", 0) > 0 and v.get("status") in ("active", "expired")]
+    
+    # Aggregate per MAC
+    from collections import defaultdict
+    mac_stats = defaultdict(lambda: {"total_purchases": 0, "total_spent": 0, "total_hours": 0, "first_seen": None, "last_seen": None, "hostname": ""})
+    
+    for v in paid:
+        mac = v.get("mac", "").upper()
+        if not mac:
+            continue
+        s = mac_stats[mac]
+        s["total_purchases"] += 1
+        s["total_spent"] += v.get("amount", 0)
+        
+        try:
+            created = datetime.fromisoformat(v["created"])
+            if s["first_seen"] is None or created < s["first_seen"]:
+                s["first_seen"] = created
+            if s["last_seen"] is None or created > s["last_seen"]:
+                s["last_seen"] = created
+        except (KeyError, ValueError):
+            pass
+        
+        s["hostname"] = v.get("hostname", "") or hostname_map.get(mac, "")
+    
+    # Calculate thresholds dynamically
+    if not mac_stats:
+        return {"customers": [], "summary": {"high": 0, "medium": 0, "low": 0, "total": 0}}
+    
+    purchase_counts = [s["total_purchases"] for s in mac_stats.values()]
+    max_purchases = max(purchase_counts) if purchase_counts else 1
+    
+    # Tier thresholds: high >= 5, medium 2-4, low 1
+    customers = []
+    tier_counts = {"high": 0, "medium": 0, "low": 0}
+    nicknames = get_nicknames()
+    
+    for mac, stats in mac_stats.items():
+        p = stats["total_purchases"]
+        if p >= 5:
+            tier = "high"
+        elif p >= 2:
+            tier = "medium"
+        else:
+            tier = "low"
+        
+        tier_counts[tier] += 1
+        display_name = nicknames.get(mac, "") or stats["hostname"] or hostname_map.get(mac, f"Kifaa ({mac[-5:]})")
+        customers.append({
+            "mac": mac,
+            "hostname": stats["hostname"] or hostname_map.get(mac, f"Kifaa ({mac[-5:]})"),
+            "nickname": nicknames.get(mac, ""),
+            "display_name": display_name,
+            "total_purchases": p,
+            "total_spent": stats["total_spent"],
+            "tier": tier,
+            "first_seen": stats["first_seen"].isoformat() if stats["first_seen"] else None,
+            "last_seen": stats["last_seen"].isoformat() if stats["last_seen"] else None
+        })
+    
+    # Sort by total purchases descending
+    customers.sort(key=lambda c: c["total_purchases"], reverse=True)
+    
+    return {
+        "customers": customers,
+        "summary": {
+            **tier_counts,
+            "total": len(customers)
+        }
+    }
 
 # ---------------------------------------------------------------------------
 # Routes — QR Code Generation
@@ -845,6 +1093,7 @@ async def redeem_voucher_code(req: RedeemRequest, request: Request):
                 
     if not mac:
         logger.error(f"Redeem failed: No MAC found for IP {client_ip}")
+
         raise HTTPException(status_code=400, detail="Could not identify your device. Please ensure you are connected directly to the WiFi.")
     
     # Check if already whitelisted
@@ -860,7 +1109,23 @@ async def redeem_voucher_code(req: RedeemRequest, request: Request):
 
     # Issue an active internet session (Voucher)
     now = datetime.now()
-    expires = now + timedelta(hours=target_code.get("duration_hours", 24))
+    duration_hours = target_code.get("duration_hours", 24)
+    expires = now + timedelta(hours=duration_hours)
+
+    # Cap expiry to daily cutoff time if configured
+    config = get_config()
+    cutoff = config.get("dailyCutoff", "")
+    if cutoff:
+        try:
+            ch, cm = map(int, cutoff.split(":"))
+            next_cutoff = now.replace(hour=ch, minute=cm, second=0, microsecond=0)
+            if next_cutoff <= now:
+                next_cutoff += timedelta(days=1)
+            if expires > next_cutoff:
+                expires = next_cutoff
+                logger.info(f"Voucher expiry capped to daily cutoff at {cutoff} → {expires.isoformat()}")
+        except Exception as e:
+            logger.warning(f"Invalid dailyCutoff format '{cutoff}': {e}")
 
     vid = str(uuid.uuid4())[:8]
     session_voucher = {
@@ -951,16 +1216,61 @@ async def expiry_enforcer():
     """
     Every 30s: read vouchers directly from DB and enforce expiry on the router.
     - Active vouchers past their expiry → mark expired + block on router
-    - Expired vouchers whose MAC is still somehow in the router → re-block
+    - Daily cutoff: at the configured time, mass-expire ALL active vouchers
     This fires independently of the DHCP scrape.
     """
     await asyncio.sleep(10)  # Short initial delay after startup
+    _last_cutoff_date = None  # Track which date we last executed the cutoff for
+    
     while True:
         try:
             now = datetime.now()
+            config = get_config()
             vouchers = get_vouchers()
             changed = False
 
+            # ── Daily Cutoff Check ──
+            cutoff_str = config.get("dailyCutoff", "")
+            if cutoff_str:
+                try:
+                    ch, cm = map(int, cutoff_str.split(":"))
+                    cutoff_today = now.replace(hour=ch, minute=cm, second=0, microsecond=0)
+                    cutoff_date_key = cutoff_today.strftime("%Y-%m-%d") + "-" + cutoff_str
+                    
+                    if _last_cutoff_date is None:
+                        # Prevent immediate triggering if we start the server after today's cutoff time
+                        if now >= cutoff_today:
+                            _last_cutoff_date = cutoff_date_key
+                    elif now >= cutoff_today and _last_cutoff_date != cutoff_date_key:
+                        _last_cutoff_date = cutoff_date_key
+                        active_count = 0
+                        for v in vouchers:
+                            if v.get("status") == "active":
+                                mac = v.get("mac", "").upper()
+                                v["status"] = "expired"
+                                v["expires"] = now.isoformat()
+                                changed = True
+                                active_count += 1
+                                await block_device(mac)
+                                
+                                devices_store = get_devices_store()
+                                for ds in devices_store:
+                                    if ds.get("mac", "").upper() == mac:
+                                        ds["status"] = "expired"
+                                        break
+                                save_devices_store(devices_store)
+                        
+                        if active_count > 0:
+                            logger.info(f"🕐 [cutoff] Daily cutoff at {cutoff_str} — expired {active_count} active vouchers")
+                            await ws_manager.broadcast({
+                                "type": "cutoff_triggered",
+                                "time": cutoff_str,
+                                "expired_count": active_count
+                            })
+                except Exception as e:
+                    logger.warning(f"Cutoff check error: {e}")
+
+            # ── Normal per-voucher expiry ──
             for v in vouchers:
                 if v.get("status") not in ("active", "expired"):
                     continue
@@ -981,10 +1291,8 @@ async def expiry_enforcer():
                             "reason": "voucher_expired"
                         })
                         
-                        # Only queue the block when the voucher specifically switches to expired
                         await block_device(mac)
 
-                        # Update devices_store status securely
                         devices_store = get_devices_store()
                         for ds in devices_store:
                             if ds.get("mac", "").upper() == mac:
@@ -1007,7 +1315,7 @@ async def expiry_enforcer():
 
 async def device_monitor():
     """Run every 5 seconds: scrape devices, enforce blocks, detect spoofs."""
-    await asyncio.sleep(1)  # Initial delay
+    await asyncio.sleep(0.5)  # Initial delay
     while True:
         try:
             config = get_config()
@@ -1033,6 +1341,9 @@ async def device_monitor():
 
                 # Skip whitelisted
                 if mac in wl_macs:
+                    if not rd.get("router_allowed"):
+                        logger.info(f"Self-heal: Whitelisted device {mac} missing from router MAC filter. Unblocking...")
+                        await unblock_device(mac)
                     continue
 
                 # Check for active voucher
@@ -1051,7 +1362,7 @@ async def device_monitor():
 
                 if existing:
                     # MAC matches but hostname changed
-                    if existing.get("hostname") and existing["hostname"] != hostname:
+                    if hostname not in ("Offline", "unknown", "", "—") and existing.get("hostname") and existing["hostname"] != hostname:
                         logger.warning(f"Hostname changed: {existing['hostname']} → {hostname} for MAC {mac}")
                         existing["hostname"] = hostname
                         existing["hostname_changed"] = True
@@ -1061,7 +1372,7 @@ async def device_monitor():
                 for ds in devices_store:
                     if (ds.get("hostname") == hostname
                             and ds.get("mac", "").upper() != mac
-                            and hostname not in ("unknown", "", "*")):
+                            and hostname not in ("unknown", "", "*", "Offline", "—")):
                         logger.warning(f"SPOOF? Hostname '{hostname}' seen with MAC {mac}, previously {ds['mac']}")
                         await ws_manager.broadcast({
                             "type": "device_spoofed",
@@ -1100,6 +1411,11 @@ async def device_monitor():
                             "reason": "expired"
                         })
                         changed = True
+                    elif not rd.get("router_allowed"):
+                        # Device is authorized but dropped from router
+                        logger.info(f"Self-heal: Active voucher device {mac} missing from router MAC filter. Unblocking...")
+                        await unblock_device(mac)
+
                 else:
                     # Unknown device (no voucher, not whitelisted)
                     if not existing or existing.get("status") not in ("blocked", "suspected_spoof", "expired"):
@@ -1153,7 +1469,7 @@ async def device_monitor():
         except Exception as e:
             logger.error(f"Device monitor error: {e}")
 
-        await asyncio.sleep(5)
+        await asyncio.sleep(2)
 
 
 

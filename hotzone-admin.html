@@ -1,832 +1,2423 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HotZone Admin</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-:root{--bg:#08080d;--s1:#0f0f18;--s2:#161622;--s3:#1e1e30;--border:rgba(255,255,255,.06);--t:#e8e8ed;--td:#6a6a82;--accent:#6c5ce7;--ag:rgba(108,92,231,.2);--green:#00d2a0;--gg:rgba(0,210,160,.15);--red:#ff6b6b;--rg:rgba(255,107,107,.15);--orange:#ffa502;--og:rgba(255,165,2,.15);--r:14px}
-body{font-family:-apple-system,system-ui,'Segoe UI',sans-serif;background:var(--bg);color:var(--t);min-height:100vh}
-a{color:var(--accent);text-decoration:none}
-.layout{display:flex;min-height:100vh}
-.sidebar{width:240px;background:var(--s1);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0;position:fixed;top:0;left:0;bottom:0;overflow-y:auto;z-index:10}
-.sidebar .logo{padding:0 20px 24px;font-size:20px;font-weight:800;background:linear-gradient(135deg,#fff,var(--accent));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
-.sidebar .logo span{font-size:12px;display:block;-webkit-text-fill-color:var(--td);margin-top:2px;font-weight:400}
-.nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;font-size:14px;color:var(--td);cursor:pointer;transition:.2s;border-left:3px solid transparent}
-.nav-item:hover,.nav-item.active{color:var(--t);background:rgba(108,92,231,.08);border-left-color:var(--accent)}
-.nav-item .icon{font-size:18px;width:24px;text-align:center}
-.main{margin-left:240px;flex:1;padding:24px;min-height:100vh}
-.page{display:none;opacity:0;animation:fadeIn .3s ease}
-.page.active{display:block;opacity:1}
-h2{font-size:22px;font-weight:700;margin-bottom:20px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px}
-.card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:20px}
-.card .label{font-size:12px;color:var(--td);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
-.card .value{font-size:28px;font-weight:800}
-.card .sub{font-size:12px;color:var(--td);margin-top:4px}
-.card.accent .value{color:var(--accent)}
-.card.green .value{color:var(--green)}
-table{width:100%;border-collapse:collapse;background:var(--s1);border-radius:var(--r);overflow:hidden;border:1px solid var(--border)}
-th{background:var(--s2);color:var(--td);font-size:11px;text-transform:uppercase;letter-spacing:1px;text-align:left;padding:12px 16px;font-weight:600}
-td{padding:10px 16px;font-size:13px;border-top:1px solid var(--border);font-family:'SF Mono',monospace,monospace}
-tr:hover td{background:rgba(108,92,231,.04)}
-.badge{display:inline-block;padding:3px 10px;border-radius:100px;font-size:11px;font-weight:600}
-.badge.whitelisted{background:var(--ag);color:var(--accent)}
-.badge.active{background:var(--gg);color:var(--green)}
-.badge.expired{background:var(--rg);color:var(--red)}
-.badge.unknown{background:var(--og);color:var(--orange)}
-.badge.blocked{background:rgba(255,255,255,.06);color:var(--td)}
-.badge.suspected_spoof{background:var(--rg);color:var(--red)}
-.badge.unauthorized_allowed{background:var(--rg);color:white;border:1px solid var(--red)}
-.badge.pending{background:var(--og);color:var(--orange)}
-.badge.blocking{background:var(--rg);color:var(--red)}
-.btn{padding:8px 16px;border:1px solid var(--border);border-radius:10px;background:var(--s2);color:var(--t);font-size:13px;cursor:pointer;transition:.2s;font-family:inherit}
-.btn:hover{border-color:var(--accent);background:var(--s3)}
-.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-.btn.primary:hover{opacity:.9}
-.btn.danger{border-color:var(--red);color:var(--red)}
-.btn.danger:hover{background:var(--rg)}
-.btn.sm{padding:4px 10px;font-size:11px}
-.form-group{margin-bottom:16px}
-.form-group label{display:block;font-size:13px;color:var(--td);margin-bottom:6px;font-weight:500}
-.form-group input,.form-group select{width:100%;padding:10px 14px;background:var(--s2);border:1px solid var(--border);border-radius:10px;color:var(--t);font-size:14px;outline:none;font-family:inherit}
-.form-group input:focus,.form-group select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--ag)}
-.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.alert-bar{padding:12px 16px;border-radius:10px;font-size:13px;margin-bottom:16px;display:none;align-items:center;gap:8px;animation:fadeIn .3s}
-.alert-bar.show{display:flex}
-.alert-bar.info{background:var(--ag);border:1px solid rgba(108,92,231,.2);color:var(--accent)}
-.alert-bar.warn{background:var(--og);border:1px solid rgba(255,165,2,.2);color:var(--orange)}
-.alert-bar.error{background:var(--rg);border:1px solid rgba(255,107,107,.2);color:var(--red)}
-.alert-bar.success{background:var(--gg);border:1px solid rgba(0,210,160,.2);color:var(--green)}
-.timer{font-variant-numeric:tabular-nums;font-weight:600;font-size:12px;color:var(--green)}
-.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px}
-.dot.online{background:var(--green);box-shadow:0 0 8px var(--gg)}
-.dot.offline{background:var(--red)}
-.empty{text-align:center;padding:40px;color:var(--td);font-size:14px}
-.whitelist-form{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
-.whitelist-form input{flex:1;min-width:140px;padding:8px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--t);font-size:13px;outline:none}
-.whitelist-form input:focus{border-color:var(--accent)}
-.qr-card{text-align:center;padding:24px}
-.qr-card img{max-width:200px;border-radius:12px;border:2px solid var(--border);margin:12px 0}
-.qr-card p{color:var(--td);font-size:13px;margin-top:8px}
-.code-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;margin-top:16px}
-.code-card{background:var(--s2);border:1px solid var(--border);border-radius:var(--r);padding:16px;text-align:center;position:relative}
-.code-card .code-text{font-size:22px;font-weight:800;letter-spacing:3px;color:var(--accent);margin:8px 0}
-.code-card .code-meta{font-size:11px;color:var(--td)}
-.code-card img{max-width:120px;margin:8px auto;display:block;border-radius:8px}
-.code-card .code-actions{margin-top:10px;display:flex;gap:6px;justify-content:center}
-.code-badge{display:inline-block;padding:2px 8px;border-radius:100px;font-size:10px;font-weight:600}
-.code-badge.unused{background:var(--gg);color:var(--green)}
-.code-badge.used{background:var(--rg);color:var(--red)}
-.create-form{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:end}
-.create-form .form-group{margin-bottom:0}
-.create-form input,.create-form select{padding:8px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--t);font-size:13px;outline:none}
-.create-form input:focus,.create-form select:focus{border-color:var(--accent)}
-#toastContainer{position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px}
-.toast{padding:12px 20px;border-radius:10px;font-size:13px;font-weight:500;animation:slideIn .3s ease;backdrop-filter:blur(20px);box-shadow:0 8px 32px rgba(0,0,0,.4)}
-.toast.info{background:rgba(108,92,231,.9);color:#fff}
-.toast.warn{background:rgba(255,165,2,.9);color:#000}
-.toast.error{background:rgba(255,107,107,.9);color:#fff}
-@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
-@keyframes slideIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
-@keyframes spin{to{transform:rotate(360deg)}}
-@media(max-width:768px){.sidebar{display:none}.main{margin-left:0;padding:16px;padding-bottom:80px}.cards{grid-template-columns:1fr;gap:12px}.bottom-nav{display:flex!important}.table-wrapper{overflow-x:auto;-webkit-overflow-scrolling:touch}table{white-space:nowrap}}
-.bottom-nav{display:none;position:fixed;bottom:0;left:0;right:0;background:var(--s1);border-top:1px solid var(--border);z-index:9999;justify-content:space-around;padding:8px 0;box-shadow:0 -4px 16px rgba(0,0,0,0.2);backdrop-filter:blur(10px)}
-.bottom-nav .nav-item{flex-direction:column;gap:4px;padding:4px;font-size:10px;border-left:none!important;border-bottom:3px solid transparent}
-.bottom-nav .nav-item .icon{font-size:22px;margin-bottom:-2px}
-.bottom-nav .nav-item:hover,.bottom-nav .nav-item.active{background:transparent;border-bottom-color:var(--accent)}
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HotZone Admin</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box
+    }
 
-/* Loading states */
-.btn.loading{pointer-events:none;opacity:.6;position:relative}
-.btn.loading::after{content:'';display:inline-block;width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-radius:50%;border-top-color:#fff;animation:spin .6s linear infinite;margin-left:6px;vertical-align:middle}
-.btn.danger.loading::after{border-top-color:var(--red)}
-.table-loading td{color:var(--td)!important;position:relative}
-.table-loading td::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(108,92,231,.04),transparent);animation:shimmer 1.5s infinite}
-@keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
-.activity-bar{position:fixed;bottom:24px;right:24px;z-index:9000;padding:12px 20px;border-radius:12px;font-size:13px;font-weight:500;display:flex;align-items:center;gap:12px;background:var(--s2);border:1px solid var(--accent);color:var(--t);box-shadow:0 8px 32px rgba(108,92,231,.25);animation:slideUp .3s}
-.activity-bar .activity-spinner{width:16px;height:16px;border:2px solid rgba(108,92,231,.3);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;flex-shrink:0}
-.activity-bar.hidden{display:none;opacity:0;pointer-events:none}
-@keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+    :root {
+      --bg: #08080d;
+      --s1: #0f0f18;
+      --s2: #161622;
+      --s3: #1e1e30;
+      --border: rgba(255, 255, 255, .06);
+      --t: #e8e8ed;
+      --td: #6a6a82;
+      --accent: #6c5ce7;
+      --ag: rgba(108, 92, 231, .2);
+      --green: #00d2a0;
+      --gg: rgba(0, 210, 160, .15);
+      --red: #ff6b6b;
+      --rg: rgba(255, 107, 107, .15);
+      --orange: #ffa502;
+      --og: rgba(255, 165, 2, .15);
+      --r: 14px
+    }
 
-/* Print Styles */
-@media print {
-  body { background: #fff !important; color: #000 !important; }
-  .sidebar, .qr-card, .create-form, h2, p:not(.code-meta), #toastContainer, #alertBar, #activityBar, .nav-item { display: none !important; }
-  .layout, .main { margin: 0 !important; padding: 0 !important; display: block !important; width: 100% !important; background: #fff !important; }
-  .code-actions { display: none !important; }
-  
-  /* Manage print scopes */
-  body.print-unused .code-card:has(.code-badge.used) { display: none !important; }
-  body.print-unused .code-grid .empty { display: none !important; }
-  body.print-single .code-card:not(.print-target) { display: none !important; }
+    body {
+      font-family: -apple-system, system-ui, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--t);
+      min-height: 100vh
+    }
 
-  .code-grid {
-    display: grid !important;
-    grid-template-columns: repeat(2, 1fr) !important;
-    gap: 16px !important;
-    margin: 0 !important;
-    padding: 16px !important;
-  }
-  .code-card {
-    width: 100% !important;
-    border: 2px solid #000 !important;
-    background: #fff !important;
-    padding: 0 !important;
-    page-break-inside: avoid !important;
-    border-radius: 10px !important;
-    box-shadow: none !important;
-    color: #000 !important;
-    text-align: left !important;
-    overflow: hidden !important;
-  }
-  /* Header gradient → solid dark for print */
-  .code-card > div:first-child { background: #222 !important; color: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .code-card > div:first-child * { color: #fff !important; }
-  .code-card img { width: 70px !important; height: 70px !important; border: 1px solid #ccc !important; border-radius: 4px !important; }
-  .code-card .code-meta { color: #333 !important; font-size: 11px !important; }
-  .code-badge { display: none !important; }
-  /* Make numbered step circles visible on print */
-  .code-card span[style*="border-radius:50%"] { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  /* Voucher code box */
-  .code-card div[style*="letter-spacing:4px"] { color: #000 !important; }
-  .code-card div[style*="border:2px solid"] { border-color: #000 !important; background: #f0f0f0 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-}
+    a {
+      color: var(--accent);
+      text-decoration: none
+    }
+
+    .layout {
+      display: flex;
+      min-height: 100vh
+    }
+
+    .sidebar {
+      width: 240px;
+      background: var(--s1);
+      border-right: 1px solid var(--border);
+      padding: 20px 0;
+      flex-shrink: 0;
+      position: fixed;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      overflow-y: auto;
+      z-index: 10
+    }
+
+    .sidebar .logo {
+      padding: 0 20px 24px;
+      font-size: 20px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #fff, var(--accent));
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent
+    }
+
+    .sidebar .logo span {
+      font-size: 12px;
+      display: block;
+      -webkit-text-fill-color: var(--td);
+      margin-top: 2px;
+      font-weight: 400
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 20px;
+      font-size: 14px;
+      color: var(--td);
+      cursor: pointer;
+      transition: .2s;
+      border-left: 3px solid transparent
+    }
+
+    .nav-item:hover,
+    .nav-item.active {
+      color: var(--t);
+      background: rgba(108, 92, 231, .08);
+      border-left-color: var(--accent)
+    }
+
+    .nav-item .icon {
+      font-size: 18px;
+      width: 24px;
+      text-align: center
+    }
+
+    .main {
+      margin-left: 240px;
+      flex: 1;
+      padding: 24px;
+      min-height: 100vh
+    }
+
+    .page {
+      display: none;
+      opacity: 0;
+      animation: fadeIn .3s ease
+    }
+
+    .page.active {
+      display: block;
+      opacity: 1
+    }
+
+    h2 {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 20px
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px
+    }
+
+    .card {
+      background: var(--s1);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 20px
+    }
+
+    .card .label {
+      font-size: 12px;
+      color: var(--td);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px
+    }
+
+    .card .value {
+      font-size: 28px;
+      font-weight: 800
+    }
+
+    .card .sub {
+      font-size: 12px;
+      color: var(--td);
+      margin-top: 4px
+    }
+
+    .card.accent .value {
+      color: var(--accent)
+    }
+
+    .card.green .value {
+      color: var(--green)
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--s1);
+      border-radius: var(--r);
+      overflow: hidden;
+      border: 1px solid var(--border)
+    }
+
+    th {
+      background: var(--s2);
+      color: var(--td);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      text-align: left;
+      padding: 12px 16px;
+      font-weight: 600
+    }
+
+    td {
+      padding: 10px 16px;
+      font-size: 13px;
+      border-top: 1px solid var(--border);
+      font-family: 'SF Mono', monospace, monospace
+    }
+
+    tr:hover td {
+      background: rgba(108, 92, 231, .04)
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 100px;
+      font-size: 11px;
+      font-weight: 600
+    }
+
+    .badge.whitelisted {
+      background: var(--ag);
+      color: var(--accent)
+    }
+
+    .badge.active {
+      background: var(--gg);
+      color: var(--green)
+    }
+
+    .badge.expired {
+      background: var(--rg);
+      color: var(--red)
+    }
+
+    .badge.unknown {
+      background: var(--og);
+      color: var(--orange)
+    }
+
+    .badge.blocked {
+      background: rgba(255, 255, 255, .06);
+      color: var(--td)
+    }
+
+    .badge.suspected_spoof {
+      background: var(--rg);
+      color: var(--red)
+    }
+
+    .badge.unauthorized_allowed {
+      background: var(--rg);
+      color: white;
+      border: 1px solid var(--red)
+    }
+
+    .badge.pending {
+      background: var(--og);
+      color: var(--orange)
+    }
+
+    .badge.blocking {
+      background: var(--rg);
+      color: var(--red)
+    }
+
+    .badge.tier-high {
+      background: var(--gg);
+      color: var(--green);
+      font-weight: 700
+    }
+
+    .badge.tier-medium {
+      background: var(--og);
+      color: var(--orange);
+      font-weight: 700
+    }
+
+    .badge.tier-low {
+      background: var(--rg);
+      color: var(--red);
+      font-weight: 700
+    }
+
+    /* Chart styles */
+    .chart-container {
+      background: var(--s1);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 20px;
+      margin-bottom: 16px
+    }
+
+    .chart-title {
+      font-size: 14px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      color: var(--t)
+    }
+
+    .bar-chart {
+      display: flex;
+      align-items: flex-end;
+      gap: 6px;
+      height: 120px;
+      padding: 0 4px
+    }
+
+    .bar-chart .bar-col {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px
+    }
+
+    .bar-chart .bar {
+      width: 100%;
+      min-width: 20px;
+      border-radius: 6px 6px 0 0;
+      transition: height .4s ease;
+      position: relative;
+      cursor: pointer
+    }
+
+    .bar-chart .bar:hover {
+      opacity: .85
+    }
+
+    .bar-chart .bar-label {
+      font-size: 10px;
+      color: var(--td);
+      white-space: nowrap
+    }
+
+    .bar-chart .bar-value {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--t)
+    }
+
+    .mini-chart {
+      display: flex;
+      align-items: flex-end;
+      gap: 3px;
+      height: 60px
+    }
+
+    .mini-chart .bar {
+      flex: 1;
+      min-width: 8px;
+      border-radius: 4px 4px 0 0;
+      transition: height .4s ease
+    }
+
+    .tier-summary {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 20px
+    }
+
+    .tier-card {
+      background: var(--s1);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 16px;
+      text-align: center
+    }
+
+    .tier-card .tier-icon {
+      font-size: 28px;
+      margin-bottom: 4px
+    }
+
+    .tier-card .tier-count {
+      font-size: 32px;
+      font-weight: 800
+    }
+
+    .tier-card .tier-label {
+      font-size: 11px;
+      color: var(--td);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-top: 4px
+    }
+
+    .tier-card.high {
+      border-color: rgba(0, 210, 160, .3)
+    }
+
+    .tier-card.high .tier-count {
+      color: var(--green)
+    }
+
+    .tier-card.medium {
+      border-color: rgba(255, 165, 2, .3)
+    }
+
+    .tier-card.medium .tier-count {
+      color: var(--orange)
+    }
+
+    .tier-card.low {
+      border-color: rgba(255, 107, 107, .3)
+    }
+
+    .tier-card.low .tier-count {
+      color: var(--red)
+    }
+
+    .cutoff-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 165, 2, .1);
+      border: 1px solid rgba(255, 165, 2, .2);
+      border-radius: 8px;
+      padding: 4px 12px;
+      font-size: 12px;
+      color: var(--orange);
+      font-weight: 600
+    }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 20px
+    }
+
+    @media(max-width:768px) {
+      .dashboard-grid {
+        grid-template-columns: 1fr
+      }
+
+      .tier-summary {
+        grid-template-columns: 1fr
+      }
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--s2);
+      color: var(--t);
+      font-size: 13px;
+      cursor: pointer;
+      transition: .2s;
+      font-family: inherit
+    }
+
+    .btn:hover {
+      border-color: var(--accent);
+      background: var(--s3)
+    }
+
+    .btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff
+    }
+
+    .btn.primary:hover {
+      opacity: .9
+    }
+
+    .btn.danger {
+      border-color: var(--red);
+      color: var(--red)
+    }
+
+    .btn.danger:hover {
+      background: var(--rg)
+    }
+
+    .btn.sm {
+      padding: 4px 10px;
+      font-size: 11px
+    }
+
+    .form-group {
+      margin-bottom: 16px
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 13px;
+      color: var(--td);
+      margin-bottom: 6px;
+      font-weight: 500
+    }
+
+    .form-group input,
+    .form-group select {
+      width: 100%;
+      padding: 10px 14px;
+      background: var(--s2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--t);
+      font-size: 14px;
+      outline: none;
+      font-family: inherit
+    }
+
+    .form-group input:focus,
+    .form-group select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--ag)
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px
+    }
+
+    .alert-bar {
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 13px;
+      margin-bottom: 16px;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      animation: fadeIn .3s
+    }
+
+    .alert-bar.show {
+      display: flex
+    }
+
+    .alert-bar.info {
+      background: var(--ag);
+      border: 1px solid rgba(108, 92, 231, .2);
+      color: var(--accent)
+    }
+
+    .alert-bar.warn {
+      background: var(--og);
+      border: 1px solid rgba(255, 165, 2, .2);
+      color: var(--orange)
+    }
+
+    .alert-bar.error {
+      background: var(--rg);
+      border: 1px solid rgba(255, 107, 107, .2);
+      color: var(--red)
+    }
+
+    .alert-bar.success {
+      background: var(--gg);
+      border: 1px solid rgba(0, 210, 160, .2);
+      color: var(--green)
+    }
+
+    .timer {
+      font-variant-numeric: tabular-nums;
+      font-weight: 600;
+      font-size: 12px;
+      color: var(--green)
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      margin-right: 4px
+    }
+
+    .dot.online {
+      background: var(--green);
+      box-shadow: 0 0 8px var(--gg)
+    }
+
+    .dot.offline {
+      background: var(--red)
+    }
+
+    .empty {
+      text-align: center;
+      padding: 40px;
+      color: var(--td);
+      font-size: 14px
+    }
+
+    .whitelist-form {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      flex-wrap: wrap
+    }
+
+    .whitelist-form input {
+      flex: 1;
+      min-width: 140px;
+      padding: 8px 12px;
+      background: var(--s2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--t);
+      font-size: 13px;
+      outline: none
+    }
+
+    .whitelist-form input:focus {
+      border-color: var(--accent)
+    }
+
+    .qr-card {
+      text-align: center;
+      padding: 24px
+    }
+
+    .qr-card img {
+      max-width: 200px;
+      border-radius: 12px;
+      border: 2px solid var(--border);
+      margin: 12px 0
+    }
+
+    .qr-card p {
+      color: var(--td);
+      font-size: 13px;
+      margin-top: 8px
+    }
+
+    .code-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 12px;
+      margin-top: 16px
+    }
+
+    .code-card {
+      background: var(--s2);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 16px;
+      text-align: center;
+      position: relative
+    }
+
+    .code-card .code-text {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 3px;
+      color: var(--accent);
+      margin: 8px 0
+    }
+
+    .code-card .code-meta {
+      font-size: 11px;
+      color: var(--td)
+    }
+
+    .code-card img {
+      max-width: 120px;
+      margin: 8px auto;
+      display: block;
+      border-radius: 8px
+    }
+
+    .code-card .code-actions {
+      margin-top: 10px;
+      display: flex;
+      gap: 6px;
+      justify-content: center
+    }
+
+    .code-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 100px;
+      font-size: 10px;
+      font-weight: 600
+    }
+
+    .code-badge.unused {
+      background: var(--gg);
+      color: var(--green)
+    }
+
+    .code-badge.used {
+      background: var(--rg);
+      color: var(--red)
+    }
+
+    .create-form {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+      align-items: end
+    }
+
+    .create-form .form-group {
+      margin-bottom: 0
+    }
+
+    .create-form input,
+    .create-form select {
+      padding: 8px 12px;
+      background: var(--s2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--t);
+      font-size: 13px;
+      outline: none
+    }
+
+    .create-form input:focus,
+    .create-form select:focus {
+      border-color: var(--accent)
+    }
+
+    #toastContainer {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 8px
+    }
+
+    .toast {
+      padding: 12px 20px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      animation: slideIn .3s ease;
+      backdrop-filter: blur(20px);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, .4)
+    }
+
+    .toast.info {
+      background: rgba(108, 92, 231, .9);
+      color: #fff
+    }
+
+    .toast.warn {
+      background: rgba(255, 165, 2, .9);
+      color: #000
+    }
+
+    .toast.error {
+      background: rgba(255, 107, 107, .9);
+      color: #fff
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(4px)
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0)
+      }
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateX(40px)
+      }
+
+      to {
+        opacity: 1;
+        transform: translateX(0)
+      }
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg)
+      }
+    }
+
+    @media(max-width:768px) {
+      .sidebar {
+        display: none
+      }
+
+      .main {
+        margin-left: 0;
+        padding: 16px;
+        padding-bottom: 80px
+      }
+
+      .cards {
+        grid-template-columns: 1fr;
+        gap: 12px
+      }
+
+      .bottom-nav {
+        display: flex !important
+      }
+
+      .table-wrapper {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch
+      }
+
+      table {
+        white-space: nowrap
+      }
+    }
+
+    .bottom-nav {
+      display: none;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--s1);
+      border-top: 1px solid var(--border);
+      z-index: 9999;
+      justify-content: space-around;
+      padding: 8px 0;
+      box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.2);
+      backdrop-filter: blur(10px)
+    }
+
+    .bottom-nav .nav-item {
+      flex-direction: column;
+      gap: 4px;
+      padding: 4px;
+      font-size: 10px;
+      border-left: none !important;
+      border-bottom: 3px solid transparent
+    }
+
+    .bottom-nav .nav-item .icon {
+      font-size: 22px;
+      margin-bottom: -2px
+    }
+
+    .bottom-nav .nav-item:hover,
+    .bottom-nav .nav-item.active {
+      background: transparent;
+      border-bottom-color: var(--accent)
+    }
+
+    /* Loading states */
+    .btn.loading {
+      pointer-events: none;
+      opacity: .6;
+      position: relative
+    }
+
+    .btn.loading::after {
+      content: '';
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid rgba(255, 255, 255, .3);
+      border-radius: 50%;
+      border-top-color: #fff;
+      animation: spin .6s linear infinite;
+      margin-left: 6px;
+      vertical-align: middle
+    }
+
+    .btn.danger.loading::after {
+      border-top-color: var(--red)
+    }
+
+    .table-loading td {
+      color: var(--td) !important;
+      position: relative
+    }
+
+    .table-loading td::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(108, 92, 231, .04), transparent);
+      animation: shimmer 1.5s infinite
+    }
+
+    @keyframes shimmer {
+      0% {
+        transform: translateX(-100%)
+      }
+
+      100% {
+        transform: translateX(100%)
+      }
+    }
+
+    .activity-bar {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 9000;
+      padding: 12px 20px;
+      border-radius: 12px;
+      font-size: 13px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--s2);
+      border: 1px solid var(--accent);
+      color: var(--t);
+      box-shadow: 0 8px 32px rgba(108, 92, 231, .25);
+      animation: slideUp .3s
+    }
+
+    .activity-bar .activity-spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(108, 92, 231, .3);
+      border-radius: 50%;
+      border-top-color: var(--accent);
+      animation: spin .6s linear infinite;
+      flex-shrink: 0
+    }
+
+    .activity-bar.hidden {
+      display: none;
+      opacity: 0;
+      pointer-events: none
+    }
+
+    @keyframes slideUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px)
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0)
+      }
+    }
+
+    /* Print Styles */
+    @media print {
+      body {
+        background: #fff !important;
+        color: #000 !important;
+      }
+
+      .sidebar,
+      .qr-card,
+      .create-form,
+      h2,
+      p:not(.code-meta),
+      #toastContainer,
+      #alertBar,
+      #activityBar,
+      .nav-item {
+        display: none !important;
+      }
+
+      .layout,
+      .main {
+        margin: 0 !important;
+        padding: 0 !important;
+        display: block !important;
+        width: 100% !important;
+        background: #fff !important;
+      }
+
+      .code-actions {
+        display: none !important;
+      }
+
+      /* Manage print scopes */
+      body.print-unused .code-card:has(.code-badge.used) {
+        display: none !important;
+      }
+
+      body.print-unused .code-grid .empty {
+        display: none !important;
+      }
+
+      body.print-single .code-card:not(.print-target) {
+        display: none !important;
+      }
+
+      .code-grid {
+        display: grid !important;
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 16px !important;
+        margin: 0 !important;
+        padding: 16px !important;
+      }
+
+      .code-card {
+        width: 100% !important;
+        border: 2px solid #000 !important;
+        background: #fff !important;
+        padding: 0 !important;
+        page-break-inside: avoid !important;
+        border-radius: 10px !important;
+        box-shadow: none !important;
+        color: #000 !important;
+        text-align: left !important;
+        overflow: hidden !important;
+      }
+
+      /* Header gradient → solid dark for print */
+      .code-card>div:first-child {
+        background: #222 !important;
+        color: #fff !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      .code-card>div:first-child * {
+        color: #fff !important;
+      }
+
+      .code-card img {
+        width: 70px !important;
+        height: 70px !important;
+        border: 1px solid #ccc !important;
+        border-radius: 4px !important;
+      }
+
+      .code-card .code-meta {
+        color: #333 !important;
+        font-size: 11px !important;
+      }
+
+      .code-badge {
+        display: none !important;
+      }
+
+      /* Make numbered step circles visible on print */
+      .code-card span[style*="border-radius:50%"] {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      /* Voucher code box */
+      .code-card div[style*="letter-spacing:4px"] {
+        color: #000 !important;
+      }
+
+      .code-card div[style*="border:2px solid"] {
+        border-color: #000 !important;
+        background: #f0f0f0 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+    }
 
 
-/* PIN Login Overlay */
-#pinOverlay{position:fixed;inset:0;z-index:10000;background:var(--bg);display:flex;align-items:center;justify-content:center;flex-direction:column}
-#pinOverlay.hidden{display:none}
-.pin-container{text-align:center;animation:fadeIn .5s ease}
-.pin-logo{font-size:36px;font-weight:800;background:linear-gradient(135deg,#fff,var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:4px}
-.pin-logo-sub{font-size:13px;color:var(--td);margin-bottom:40px}
-.pin-lock-icon{font-size:48px;margin-bottom:16px;filter:drop-shadow(0 0 24px var(--ag))}
-.pin-title{font-size:18px;font-weight:700;color:var(--t);margin-bottom:6px}
-.pin-subtitle{font-size:13px;color:var(--td);margin-bottom:28px}
-.pin-digits{display:flex;gap:12px;justify-content:center;margin-bottom:20px}
-.pin-digit{width:56px;height:64px;background:var(--s1);border:2px solid var(--border);border-radius:14px;font-size:28px;font-weight:800;color:var(--t);text-align:center;outline:none;font-family:inherit;caret-color:var(--accent);transition:border-color .2s,box-shadow .2s}
-.pin-digit:focus{border-color:var(--accent);box-shadow:0 0 0 4px var(--ag)}
-.pin-digit.filled{border-color:var(--accent);background:var(--s2)}
-.pin-error{color:var(--red);font-size:13px;font-weight:500;min-height:20px;margin-bottom:12px;opacity:0;transition:opacity .3s}
-.pin-error.show{opacity:1}
-@keyframes pinShake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-10px)}40%,80%{transform:translateX(10px)}}
-.pin-digits.shake{animation:pinShake .4s ease}
-.pin-digits.shake .pin-digit{border-color:var(--red)!important;box-shadow:0 0 0 4px var(--rg)!important}
-</style>
+    /* PIN Login Overlay */
+    #pinOverlay {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      background: var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column
+    }
+
+    #pinOverlay.hidden {
+      display: none
+    }
+
+    .pin-container {
+      text-align: center;
+      animation: fadeIn .5s ease
+    }
+
+    .pin-logo {
+      font-size: 36px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #fff, var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 4px
+    }
+
+    .pin-logo-sub {
+      font-size: 13px;
+      color: var(--td);
+      margin-bottom: 40px
+    }
+
+    .pin-lock-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+      filter: drop-shadow(0 0 24px var(--ag))
+    }
+
+    .pin-title {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--t);
+      margin-bottom: 6px
+    }
+
+    .pin-subtitle {
+      font-size: 13px;
+      color: var(--td);
+      margin-bottom: 28px
+    }
+
+    .pin-digits {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      margin-bottom: 20px
+    }
+
+    .pin-digit {
+      width: 56px;
+      height: 64px;
+      background: var(--s1);
+      border: 2px solid var(--border);
+      border-radius: 14px;
+      font-size: 28px;
+      font-weight: 800;
+      color: var(--t);
+      text-align: center;
+      outline: none;
+      font-family: inherit;
+      caret-color: var(--accent);
+      transition: border-color .2s, box-shadow .2s
+    }
+
+    .pin-digit:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px var(--ag)
+    }
+
+    .pin-digit.filled {
+      border-color: var(--accent);
+      background: var(--s2)
+    }
+
+    .pin-error {
+      color: var(--red);
+      font-size: 13px;
+      font-weight: 500;
+      min-height: 20px;
+      margin-bottom: 12px;
+      opacity: 0;
+      transition: opacity .3s
+    }
+
+    .pin-error.show {
+      opacity: 1
+    }
+
+    @keyframes pinShake {
+
+      0%,
+      100% {
+        transform: translateX(0)
+      }
+
+      20%,
+      60% {
+        transform: translateX(-10px)
+      }
+
+      40%,
+      80% {
+        transform: translateX(10px)
+      }
+    }
+
+    .pin-digits.shake {
+      animation: pinShake .4s ease
+    }
+
+    .pin-digits.shake .pin-digit {
+      border-color: var(--red) !important;
+      box-shadow: 0 0 0 4px var(--rg) !important
+    }
+  </style>
 </head>
+
 <body>
 
-<!-- PIN Login Overlay -->
-<div id="pinOverlay">
-  <div class="pin-container">
-    <div class="pin-logo">HotZone</div>
-    <div class="pin-logo-sub">WiFi Voucher Admin</div>
-    <div class="pin-lock-icon">🔒</div>
-    <div class="pin-title">Weka PIN ya Admin</div>
-    <div class="pin-subtitle">PIN ya tarakimu 4 inahitajika kuingia</div>
-    <div class="pin-digits" id="pinDigits">
-      <input type="password" inputmode="numeric" maxlength="1" class="pin-digit" id="pin1" autocomplete="off">
-      <input type="password" inputmode="numeric" maxlength="1" class="pin-digit" id="pin2" autocomplete="off">
-      <input type="password" inputmode="numeric" maxlength="1" class="pin-digit" id="pin3" autocomplete="off">
-      <input type="password" inputmode="numeric" maxlength="1" class="pin-digit" id="pin4" autocomplete="off">
-    </div>
-    <div class="pin-error" id="pinError">PIN si sahihi. Jaribu tena.</div>
-  </div>
-</div>
-<div class="layout" id="adminLayout" style="display:none">
-<aside class="sidebar">
-  <div class="logo">HotZone<span>WiFi Voucher Admin</span></div>
-  <div class="nav-item active" data-page="dashboard" onclick="showPage('dashboard')"><span class="icon">📊</span>Dashibodi</div>
-  <div class="nav-item" data-page="activeaccess" onclick="showPage('activeaccess')"><span class="icon">🟢</span>Mtandaoni</div>
-  <div class="nav-item" data-page="devices" onclick="showPage('devices')"><span class="icon">📡</span>Vifaa</div>
-  <div class="nav-item" data-page="vouchers" onclick="showPage('vouchers')"><span class="icon">🎫</span>Vouchers</div>
-  <div class="nav-item" data-page="qrcodes" onclick="showPage('qrcodes')"><span class="icon">📱</span>QR Codes</div>
-  <div class="nav-item" data-page="whitelist" onclick="showPage('whitelist')"><span class="icon">🛡️</span>Whitelist</div>
-  <div class="nav-item" data-page="settings" onclick="showPage('settings')"><span class="icon">⚙️</span>Mipangilio</div>
-</aside>
-
-<!-- Mobile Bottom Navigation -->
-<nav class="bottom-nav">
-  <div class="nav-item active" data-page="dashboard" onclick="showPage('dashboard')"><span class="icon">📊</span>Dash</div>
-  <div class="nav-item" data-page="activeaccess" onclick="showPage('activeaccess')"><span class="icon">🟢</span>Mtandaoni</div>
-  <div class="nav-item" data-page="vouchers" onclick="showPage('vouchers')"><span class="icon">🎫</span>Vouchers</div>
-  <div class="nav-item" data-page="qrcodes" onclick="showPage('qrcodes')"><span class="icon">📱</span>QR Codes</div>
-  <div class="nav-item" data-page="settings" onclick="showPage('settings')"><span class="icon">⚙️</span>Mipangilio</div>
-</nav>
-<main class="main">
-<div id="toastContainer"></div>
-<div id="alertBar" class="alert-bar"></div>
-<div id="activityBar" class="activity-bar hidden"><span class="activity-spinner"></span><span id="activityText">Inafanya kazi...</span></div>
-
-<!-- Dashboard -->
-<div class="page active" id="page-dashboard">
-  <h2>Dashibodi</h2>
-  <div class="cards">
-    <div class="card accent"><div class="label">Mapato ya Leo</div><div class="value" id="revToday">0 TZS</div></div>
-    <div class="card green"><div class="label">Mapato Yote</div><div class="value" id="revAll">0 TZS</div></div>
-    <div class="card"><div class="label">Vouchers Zinazotumika</div><div class="value" id="activeCount">0</div></div>
-    <div class="card"><div class="label">Vifaa Vilivyounganishwa</div><div class="value" id="deviceCount">0</div></div>
-  </div>
-  <h2 style="font-size:16px">Vouchers za Hivi Karibuni</h2>
-  <div class="table-wrapper">
-    <table><thead><tr><th>ID</th><th>Simu</th><th>MAC</th><th>Status</th><th>Muda Uliobaki</th><th>Imeundwa</th></tr></thead>
-    <tbody id="dashVouchers"><tr><td colspan="6" class="empty">Inapakia...</td></tr></tbody></table>
-  </div>
-</div>
-
-<!-- Mtandaoni (Active Access) -->
-<div class="page" id="page-activeaccess">
-  <h2>Vifaa Vyenye Intaneti Sahivi</h2>
-  <div style="margin-bottom:12px"><button class="btn primary" id="refreshActiveBtn" onclick="refreshActiveAccess()">🔄 Onyesha Upya Mtandao</button></div>
-  <div class="table-wrapper">
-    <table><thead><tr><th>Hostname</th><th>MAC Address</th><th>IP</th><th>Aina ya Ruhusa</th><th>Vitendo</th></tr></thead>
-    <tbody id="activeAccessTable"><tr><td colspan="5" class="empty">Inapakia...</td></tr></tbody></table>
-  </div>
-</div>
-
-<!-- Vifaa -->
-<div class="page" id="page-devices">
-  <h2>Vifaa Vilivyo Hai</h2>
-  <div style="margin-bottom:12px"><button class="btn" id="refreshBtn" onclick="refreshDevices()">🔄 Onyesha Upya</button></div>
-  <div class="table-wrapper">
-    <table><thead><tr><th>Hostname</th><th>MAC Address</th><th>IP</th><th>Status</th><th>Muda Uliobaki</th><th>Vitendo</th></tr></thead>
-    <tbody id="devicesTable"><tr><td colspan="6" class="empty">Inapakia...</td></tr></tbody></table>
-  </div>
-</div>
-
-<!-- Vouchers -->
-<div class="page" id="page-vouchers">
-  <h2>Vouchers</h2>
-  <div class="table-wrapper">
-    <table><thead><tr><th>ID</th><th>Simu</th><th>MAC</th><th>Hostname</th><th>Kiasi</th><th>Status</th><th>Muda Uliobaki</th><th>Imeundwa</th></tr></thead>
-    <tbody id="vouchersTable"><tr><td colspan="8" class="empty">Inapakia...</td></tr></tbody></table>
-  </div>
-</div>
-
-<!-- Whitelist -->
-<div class="page" id="page-whitelist">
-  <h2>Whitelist ya Vifaa</h2>
-  <p style="color:var(--td);font-size:13px;margin-bottom:16px">Vifaa hivi havitazuiwa kamwe na mfumo.</p>
-  <div class="whitelist-form">
-    <input id="wlMac" placeholder="MAC Address (AA:BB:CC:DD:EE:FF)">
-    <input id="wlHost" placeholder="Hostname">
-    <input id="wlLabel" placeholder="Jina (si lazima)">
-    <button class="btn primary" id="addWlBtn" onclick="addWhitelist()">Ongeza Kifaa</button>
-  </div>
-  <div class="table-wrapper">
-    <table><thead><tr><th>MAC Address</th><th>Hostname</th><th>Jina</th><th>Vitendo</th></tr></thead>
-    <tbody id="whitelistTable"><tr><td colspan="4" class="empty">Inapakia...</td></tr></tbody></table>
-  </div>
-</div>
-
-<!-- QR Codes na Voucher Codes -->
-<div class="page" id="page-qrcodes">
-  <h2>QR Codes na Voucher Codes</h2>
-
-  <!-- WiFi Connect QR only -->
-  <div class="cards" style="margin-bottom:24px">
-    <div class="card qr-card">
-      <div class="label">📶 Scan Kuunganisha WiFi</div>
-      <p>Wateja wanaweza scan QR hii ili <strong>kuunganisha na WiFi</strong> bila kuandika password.</p>
-      <img id="connectQR" src="/api/qr/connect" alt="WiFi Connect QR">
-      <div style="margin-top:8px;font-size:11px;color:var(--td)">Inaunganisha na WiFi (bila internet)</div>
-      <br>
-      <button class="btn" onclick="downloadQR('connectQR','HotZone-WiFi-Connect.png')">⬇️ Pakua QR</button>
+  <!-- PIN Login Overlay -->
+  <div id="pinOverlay">
+    <div class="pin-container">
+      <div class="pin-logo">HotZone</div>
+      <div class="pin-logo-sub">WiFi Voucher Admin</div>
+      <div class="pin-lock-icon">🔒</div>
+      <div class="pin-title">Weka PIN ya Admin</div>
+      <div class="pin-subtitle">PIN ya tarakimu 4 inahitajika kuingia</div>
+      <div class="pin-digits" id="pinDigits">
+        <input type="password" inputmode="numeric" maxlength="1" class="pin-digit" id="pin1" autocomplete="off">
+        <input type="password" inputmode="numeric" maxlength="1" class="pin-digit" id="pin2" autocomplete="off">
+        <input type="password" inputmode="numeric" maxlength="1" class="pin-digit" id="pin3" autocomplete="off">
+        <input type="password" inputmode="numeric" maxlength="1" class="pin-digit" id="pin4" autocomplete="off">
+      </div>
+      <div class="pin-error" id="pinError">PIN si sahihi. Jaribu tena.</div>
     </div>
   </div>
+  <div class="layout" id="adminLayout" style="display:none">
+    <aside class="sidebar">
+      <div class="logo">HotZone<span>WiFi Voucher Admin</span></div>
+      <div class="nav-item active" data-page="dashboard" onclick="showPage('dashboard')"><span
+          class="icon">📊</span>Dashibodi</div>
+      <div class="nav-item" data-page="activeaccess" onclick="showPage('activeaccess')"><span
+          class="icon">🟢</span>Mtandaoni</div>
+      <div class="nav-item" data-page="devices" onclick="showPage('devices')"><span class="icon">📡</span>Vifaa</div>
+      <div class="nav-item" data-page="customers" onclick="showPage('customers')"><span class="icon">👥</span>Wateja
+      </div>
+      <div class="nav-item" data-page="vouchers" onclick="showPage('vouchers')"><span class="icon">🎫</span>Vouchers
+      </div>
+      <div class="nav-item" data-page="qrcodes" onclick="showPage('qrcodes')"><span class="icon">📱</span>QR Codes</div>
+      <div class="nav-item" data-page="whitelist" onclick="showPage('whitelist')"><span class="icon">🛡️</span>Whitelist
+      </div>
+      <div class="nav-item" data-page="settings" onclick="showPage('settings')"><span class="icon">⚙️</span>Mipangilio
+      </div>
+      <div class="nav-item" data-page="manual" onclick="showPage('manual')"><span class="icon">📖</span>Mwongozo
+        (Manual)</div>
+    </aside>
 
-  <!-- Tengeneza Voucher Codes -->
-  <h2 style="font-size:16px;margin-bottom:12px">Tengeneza Voucher Codes</h2>
-  <p style="color:var(--td);font-size:13px;margin-bottom:12px">Tengeneza voucher codes mapya. Kila voucher ina QR mbili na maelekezo kamili kwa wateja.</p>
-  <div class="create-form">
-    <div class="form-group"><label>Jina</label><input id="vcLabel" placeholder="mfano: WiFi 24h" value="WiFi 24h"></div>
-    <div class="form-group"><label>Kiasi (TZS)</label><input id="vcAmount" type="number" value="1000" min="100"></div>
-    <div class="form-group"><label>Muda (masaa)</label><input id="vcDuration" type="number" value="24" min="1"></div>
-    <div class="form-group"><label>Idadi</label><input id="vcQty" type="number" value="1" min="1" max="20"></div>
-    <button class="btn primary" id="genCodesBtn" onclick="createVoucherCodes()" style="align-self:end">🎫 Tengeneza Codes</button>
-    <button class="btn" onclick="printUnusedVouchers()" style="align-self:end">🖨️ Chapisha Zisizotumika</button>
+    <!-- Mobile Bottom Navigation -->
+    <nav class="bottom-nav">
+      <div class="nav-item active" data-page="dashboard" onclick="showPage('dashboard')"><span
+          class="icon">📊</span>Dash</div>
+      <div class="nav-item" data-page="activeaccess" onclick="showPage('activeaccess')"><span
+          class="icon">🟢</span>Mtandaoni</div>
+      <div class="nav-item" data-page="customers" onclick="showPage('customers')"><span class="icon">👥</span>Wateja
+      </div>
+      <div class="nav-item" data-page="vouchers" onclick="showPage('vouchers')"><span class="icon">🎫</span>Vouchers
+      </div>
+      <div class="nav-item" data-page="settings" onclick="showPage('settings')"><span class="icon">⚙️</span>Mipangilio
+      </div>
+      <div class="nav-item" data-page="manual" onclick="showPage('manual')"><span class="icon">📖</span>Mwongozo</div>
+    </nav>
+    <main class="main">
+      <div id="toastContainer"></div>
+      <div id="alertBar" class="alert-bar"></div>
+      <div id="activityBar" class="activity-bar hidden"><span class="activity-spinner"></span><span
+          id="activityText">Inafanya kazi...</span></div>
+
+      <!-- Nickname Modal -->
+      <div id="nicknameModal"
+        style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center;opacity:0;transition:opacity 0.2s ease">
+        <div
+          style="background:var(--s1);padding:24px;border-radius:var(--r);width:90%;max-width:340px;border:1px solid var(--border);box-shadow:0 8px 32px rgba(0,0,0,0.3);transform:translateY(20px);transition:transform 0.2s ease">
+          <h3 style="margin-bottom:8px;color:var(--t)">Badilisha Jina la Kifaa</h3>
+          <p style="font-size:12px;color:var(--td);margin-bottom:16px">Weka jina rahisi kukumbuka kwa kifaa hiki (<span
+              id="nickMacDisp" style="color:var(--accent);font-weight:600"></span>). Acha wazi ili kufuta jina lililopo.
+          </p>
+          <div style="margin-bottom:20px">
+            <label
+              style="font-size:11px;color:var(--td);display:block;margin-bottom:4px;text-transform:uppercase;font-weight:600">Jina
+              Jipya</label>
+            <input id="nicknameInput" type="text" placeholder="k.m. Simu ya Ali"
+              style="width:100%;padding:10px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--t);font-family:inherit"
+              autocomplete="off" onkeydown="if(event.key==='Enter') submitNickname()">
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button class="btn" onclick="closeNicknameModal()">Ghairi</button>
+            <button class="btn primary" onclick="submitNickname()">Hifadhi</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dashboard -->
+      <div class="page active" id="page-dashboard">
+        <h2>Dashibodi</h2>
+        <div id="cutoffBanner" style="display:none;margin-bottom:16px"></div>
+        <div class="cards">
+          <div class="card accent">
+            <div class="label">Mapato ya Leo</div>
+            <div class="value" id="revToday">0 TZS</div>
+          </div>
+          <div class="card green">
+            <div class="label">Mapato ya Wiki</div>
+            <div class="value" id="revWeek">0 TZS</div>
+          </div>
+          <div class="card" style="border-left:3px solid var(--accent)">
+            <div class="label">Mapato ya Mwezi</div>
+            <div class="value" id="revMonth">0 TZS</div>
+          </div>
+          <div class="card green">
+            <div class="label">Mapato Yote</div>
+            <div class="value" id="revAll">0 TZS</div>
+          </div>
+          <div class="card">
+            <div class="label">Vouchers Zinazotumika</div>
+            <div class="value" id="activeCount">0</div>
+          </div>
+          <div class="card">
+            <div class="label">Vifaa Vyote</div>
+            <div class="value" id="deviceCount">0</div>
+          </div>
+        </div>
+
+        <div class="dashboard-grid">
+          <!-- 7-Day Revenue Chart -->
+          <div class="chart-container">
+            <div class="chart-title">📈 Mapato ya Siku 7 Zilizopita</div>
+            <div class="bar-chart" id="revenueChart"></div>
+          </div>
+          <!-- Peak Hours Chart -->
+          <div class="chart-container">
+            <div class="chart-title">🕐 Masaa ya Shughuli Nyingi (Leo)</div>
+            <div class="bar-chart" id="peakHoursChart" style="gap:2px"></div>
+          </div>
+        </div>
+
+        <!-- Customer Summary Tiles -->
+        <div class="tier-summary" id="dashTierSummary">
+          <div class="tier-card high">
+            <div class="tier-icon">🟢</div>
+            <div class="tier-count" id="dashHigh">0</div>
+            <div class="tier-label">Wateja Wamaranyingi</div>
+          </div>
+          <div class="tier-card medium">
+            <div class="tier-icon">🟡</div>
+            <div class="tier-count" id="dashMedium">0</div>
+            <div class="tier-label">Wateja wa Kati</div>
+          </div>
+          <div class="tier-card low">
+            <div class="tier-icon">🔴</div>
+            <div class="tier-count" id="dashLow">0</div>
+            <div class="tier-label">Wateja Wapya</div>
+          </div>
+        </div>
+
+        <h2 style="font-size:16px">Vouchers za Hivi Karibuni</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Simu</th>
+                <th>MAC</th>
+                <th>Status</th>
+                <th>Muda Uliobaki</th>
+                <th>Imeundwa</th>
+              </tr>
+            </thead>
+            <tbody id="dashVouchers">
+              <tr>
+                <td colspan="6" class="empty">Inapakia...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Wateja (Customer Analytics) -->
+      <div class="page" id="page-customers">
+        <h2>👥 Wateja — Uchambuzi wa Matumizi</h2>
+        <p style="color:var(--td);font-size:13px;margin-bottom:16px">Wateja wanaorodeshwa kwa msingi wa mara ngapi
+          wananunua WiFi. <span style="color:var(--green)">🟢 Juu</span> = 5+ manunuzi, <span
+            style="color:var(--orange)">🟡 Kati</span> = 2–4, <span style="color:var(--red)">🔴 Chini</span> = 1.</p>
+        <div class="tier-summary" id="customerTierSummary">
+          <div class="tier-card high">
+            <div class="tier-icon">🟢</div>
+            <div class="tier-count" id="tierHigh">0</div>
+            <div class="tier-label">Matumizi ya Juu</div>
+          </div>
+          <div class="tier-card medium">
+            <div class="tier-icon">🟡</div>
+            <div class="tier-count" id="tierMedium">0</div>
+            <div class="tier-label">Matumizi ya Kati</div>
+          </div>
+          <div class="tier-card low">
+            <div class="tier-icon">🔴</div>
+            <div class="tier-count" id="tierLow">0</div>
+            <div class="tier-label">Matumizi ya Chini</div>
+          </div>
+        </div>
+        <div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn" onclick="loadCustomers()" id="refreshCustBtn">🔄 Onyesha Upya</button>
+          <select id="tierFilter" onchange="loadCustomers()"
+            style="padding:8px 12px;background:var(--s2);border:1px solid var(--border);border-radius:8px;color:var(--t);font-size:13px">
+            <option value="all">Wote</option>
+            <option value="high">🟢 Juu tu</option>
+            <option value="medium">🟡 Kati tu</option>
+            <option value="low">🔴 Chini tu</option>
+          </select>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Mteja</th>
+                <th>MAC</th>
+                <th>Manunuzi</th>
+                <th>Jumla Matumizi</th>
+                <th>Kiwango</th>
+                <th>Mwisho Kununua</th>
+              </tr>
+            </thead>
+            <tbody id="customersTable">
+              <tr>
+                <td colspan="6" class="empty">Inapakia...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Mtandaoni (Active Access) -->
+      <div class="page" id="page-activeaccess">
+        <h2>Vifaa Vyenye Intaneti Sahivi</h2>
+        <div style="margin-bottom:12px"><button class="btn primary" id="refreshActiveBtn"
+            onclick="refreshActiveAccess()">🔄 Onyesha Upya Mtandao</button></div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Hostname</th>
+                <th>MAC Address</th>
+                <th>IP</th>
+                <th>Aina ya Ruhusa</th>
+                <th>Vitendo</th>
+              </tr>
+            </thead>
+            <tbody id="activeAccessTable">
+              <tr>
+                <td colspan="5" class="empty">Inapakia...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Vifaa -->
+      <div class="page" id="page-devices">
+        <h2>Vifaa Vilivyo Hai</h2>
+        <div style="margin-bottom:12px"><button class="btn" id="refreshBtn" onclick="refreshDevices()">🔄 Onyesha
+            Upya</button></div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>Hostname</th>
+                <th>MAC Address</th>
+                <th>IP</th>
+                <th>Status</th>
+                <th>Muda Uliobaki</th>
+                <th>Vitendo</th>
+              </tr>
+            </thead>
+            <tbody id="devicesTable">
+              <tr>
+                <td colspan="6" class="empty">Inapakia...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Vouchers -->
+      <div class="page" id="page-vouchers">
+        <h2>Vouchers</h2>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Simu</th>
+                <th>MAC</th>
+                <th>Hostname</th>
+                <th>Kiasi</th>
+                <th>Status</th>
+                <th>Muda Uliobaki</th>
+                <th>Imeundwa</th>
+              </tr>
+            </thead>
+            <tbody id="vouchersTable">
+              <tr>
+                <td colspan="8" class="empty">Inapakia...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Whitelist -->
+      <div class="page" id="page-whitelist">
+        <h2>Whitelist ya Vifaa</h2>
+        <p style="color:var(--td);font-size:13px;margin-bottom:16px">Vifaa hivi havitazuiwa kamwe na mfumo.</p>
+        <div class="whitelist-form">
+          <input id="wlMac" placeholder="MAC Address (AA:BB:CC:DD:EE:FF)">
+          <input id="wlHost" placeholder="Hostname">
+          <button class="btn primary" id="addWlBtn" onclick="addWhitelist()">Ongeza Kifaa</button>
+        </div>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th>MAC Address</th>
+                <th>Hostname</th>
+                <th>Vitendo</th>
+              </tr>
+            </thead>
+            <tbody id="whitelistTable">
+              <tr>
+                <td colspan="3" class="empty">Inapakia...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- QR Codes na Voucher Codes -->
+      <div class="page" id="page-qrcodes">
+        <h2>QR Codes na Voucher Codes</h2>
+
+        <!-- WiFi Connect QR only -->
+        <div class="cards" style="margin-bottom:24px">
+          <div class="card qr-card">
+            <div class="label">📶 Scan Kuunganisha WiFi</div>
+            <p>Wateja wanaweza scan QR hii ili <strong>kuunganisha na WiFi</strong> bila kuandika password.</p>
+            <img id="connectQR" src="/api/qr/connect" alt="WiFi Connect QR">
+            <div style="margin-top:8px;font-size:11px;color:var(--td)">Inaunganisha na WiFi (bila internet)</div>
+            <br>
+            <button class="btn" onclick="downloadQR('connectQR','HotZone-WiFi-Connect.png')">⬇️ Pakua QR</button>
+          </div>
+        </div>
+
+        <!-- Tengeneza Voucher Codes -->
+        <h2 style="font-size:16px;margin-bottom:12px">Tengeneza Voucher Codes</h2>
+        <p style="color:var(--td);font-size:13px;margin-bottom:12px">Tengeneza voucher codes mapya. Kila voucher ina QR
+          mbili na maelekezo kamili kwa wateja.</p>
+        <div class="create-form">
+          <div class="form-group"><label>Jina</label><input id="vcLabel" placeholder="mfano: WiFi 24h" value="WiFi 24h">
+          </div>
+          <div class="form-group"><label>Kiasi (TZS)</label><input id="vcAmount" type="number" value="1000" min="100">
+          </div>
+          <div class="form-group"><label>Muda (masaa)</label><input id="vcDuration" type="number" value="24" min="1">
+          </div>
+          <div class="form-group"><label>Idadi</label><input id="vcQty" type="number" value="1" min="1" max="20"></div>
+          <button class="btn primary" id="genCodesBtn" onclick="createVoucherCodes()" style="align-self:end">🎫
+            Tengeneza Codes</button>
+          <button class="btn" onclick="printUnusedVouchers()" style="align-self:end">🖨️ Chapisha Zisizotumika</button>
+        </div>
+
+        <!-- Voucher Codes Grid -->
+        <div id="voucherCodesGrid" class="code-grid">
+          <p class="empty">Bado hakuna voucher codes. Tumia fomu hapo juu kutengeneza!</p>
+        </div>
+      </div>
+
+      <!-- Mipangilio -->
+      <div class="page" id="page-settings">
+        <h2>Mipangilio</h2>
+        <div style="max-width:600px">
+          <div class="card" style="margin-bottom:16px">
+            <div class="label" style="margin-bottom:12px">Router Configuration</div>
+            <div class="form-group"><label>Router IP</label><input id="cfgRouterIp"></div>
+            <div class="form-row">
+              <div class="form-group"><label>Username</label><input id="cfgRouterUser"></div>
+              <div class="form-group"><label>Password</label><input id="cfgRouterPass" type="password"></div>
+            </div>
+            <div class="form-group"><label>Playwright Automation</label><select id="cfgPlaywright">
+                <option value="true">Imewashwa</option>
+                <option value="false">Imezimwa</option>
+              </select></div>
+          </div>
+          <div class="card" style="margin-bottom:16px">
+            <div class="label" style="margin-bottom:12px">Server Settings</div>
+            <div class="form-row">
+              <div class="form-group"><label>Server IP (mashine hii)</label><input id="cfgServerIp"></div>
+              <div class="form-group"><label>Admin PIN (Namba 4)</label><input id="cfgAdminPin" type="password"
+                  placeholder="2004" maxlength="4" inputmode="numeric"></div>
+            </div>
+            <div class="form-group" style="margin-top:12px"><label>Gharama ya Fungua (Unblock Price TZS)</label><input
+                id="cfgUnblockPrice" type="number" placeholder="1000"></div>
+          </div>
+          <div class="card" style="margin-bottom:16px;border-left:3px solid var(--orange)">
+            <div class="label" style="margin-bottom:12px">🕐 Muda wa Kumaliza (Daily Cutoff)</div>
+            <p style="font-size:12px;color:var(--td);margin-bottom:12px">Weka muda ambao vouchers ZOTE zitamalizika kila
+              siku. Mfano: 08:00 = asubuhi saa 2. Acha tupu kuzima kipengele hiki.</p>
+            <div class="form-row">
+              <div class="form-group"><label>Muda wa Cutoff (HH:MM)</label><input id="cfgDailyCutoff" type="time"
+                  placeholder="08:00"></div>
+              <div class="form-group" style="display:flex;align-items:flex-end">
+                <button class="btn danger"
+                  onclick="document.getElementById('cfgDailyCutoff').value='';toast('Cutoff imefutwa — itahifadhiwa ukibonyeza Hifadhi','warn')"
+                  style="white-space:nowrap">❌ Ondoa Cutoff</button>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="margin-bottom:16px">
+            <div class="label" style="margin-bottom:12px">WiFi Network (kwa QR Connect)</div>
+            <div class="form-group"><label>WiFi SSID (Jina la Network)</label><input id="cfgWifiSSID"
+                placeholder="HotZone WiFi"></div>
+            <div class="form-row">
+              <div class="form-group"><label>WiFi Password</label><input id="cfgWifiPassword" type="password"></div>
+              <div class="form-group"><label>Security</label><select id="cfgWifiSecurity">
+                  <option value="WPA">WPA/WPA2</option>
+                  <option value="WEP">WEP</option>
+                  <option value="nopass">Wazi (Bila Password)</option>
+                </select></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:12px;margin-top:16px">
+            <button class="btn primary" id="saveSettingsBtn" onclick="saveSettings()">Hifadhi Mipangilio</button>
+            <button class="btn danger" id="resetRevenueBtn" onclick="resetRevenue()">🗑️ Futa Rekodi za Mapato
+              (Reset)</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Manual Page -->
+      <div class="page" id="page-manual">
+        <h2>📖 Mwongozo wa Matumizi (User Manual)</h2>
+        <div style="max-width:800px">
+
+          <!-- SEHEMU YA 1: UTANGULIZI NA DASHIBODI -->
+          <div class="card" style="margin-bottom:24px; border-left:4px solid var(--accent); padding:20px;">
+            <div class="label"
+              style="color:var(--accent); font-size:18px; margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+              1. Dashibodi (Dashboard)
+            </div>
+            <p style="font-size:14px; line-height:1.7; color:var(--t)">
+              Dashibodi ndio moyo wa biashara yako. Hapa unapata muhtasari wa haraka wa kila kitu kinachoendelea kwenye
+              mtandao wako wa WiFi:
+            </p>
+            <div style="background:var(--s1); padding:16px; border-radius:8px; margin-top:12px;">
+              <ul style="margin:0; padding-left:20px; font-size:14px; line-height:1.8; color:var(--t)">
+                <li><strong style="color:var(--green)">Mapato:</strong> Fuatilia kwa usahihi kiasi ulichoingiza leo,
+                  wiki hii, na mwezi huu.</li>
+                <li><strong style="color:var(--blue)">Vifaa Vyote:</strong> Jua idadi kamili ya watu walioconnect kwenye
+                  wifi</li>
+                <li><strong style="color:var(--orange)">Grafu ya Mapato:</strong> Tazama mwenendo wa mauzo yako kwa siku
+                  7 zilizopita ili ujue siku zipi zinaingiza pesa zaidi.</li>
+                <li><strong style="color:var(--red)">Muda wa Peak:</strong> Tambua ni saa ngapi unakuwa na wateja wengi
+                  zaidi mtandaoni.</li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- SEHEMU YA 2: KUDHIBITI VIFAA -->
+          <div class="card" style="margin-bottom:24px; border-left:4px solid var(--blue); padding:20px;">
+            <div class="label"
+              style="color:var(--blue); font-size:18px; margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+              2. Kudhibiti Vifaa vya Wateja
+            </div>
+            <p style="font-size:14px; line-height:1.7; color:var(--t)">
+              Kwenye kurasa za <strong>"Vifaa"</strong> au <strong>"Mtandaoni"</strong>, una uwezo kamili wa kumdhibiti
+              kila mtu aliyeunganishwa:
+            </p>
+            <div
+              style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:12px; margin-top:16px;">
+              <div
+                style="background:var(--s1); padding:16px; border-radius:8px; border:1px solid rgba(239, 68, 68, 0.2);">
+                <div style="font-weight:bold; color:var(--red); margin-bottom:8px;">🚫 Zuia (Block)</div>
+                <div style="font-size:13px; color:var(--td); line-height:1.5;">Ukimzuia mtu, unamkatia internet papo
+                  hapo mpaka utakapomfungulia. Kama alikuwa na vocha, inafutwa moja kwa moja.</div>
+              </div>
+              <div
+                style="background:var(--s1); padding:16px; border-radius:8px; border:1px solid rgba(16, 185, 129, 0.2);">
+                <div style="font-weight:bold; color:var(--green); margin-bottom:8px;">✅ Fungua (Unblock)</div>
+                <div style="font-size:13px; color:var(--td); line-height:1.5;">Mpe mteja internet bila kutumia namba ya
+                  vocha. Mfumo utampa muda mpaka "Daily Cutoff" ifike na kurekodi kama mauzo mapya.</div>
+              </div>
+              <div
+                style="background:var(--s1); padding:16px; border-radius:8px; border:1px solid rgba(59, 130, 246, 0.2);">
+                <div style="font-weight:bold; color:var(--blue); margin-bottom:8px;">🛡️ Whitelist</div>
+                <div style="font-size:13px; color:var(--td); line-height:1.5;">Hivi ni vifaa vya mapendeleo (kama simu
+                  yako au TV). Havihitaji vocha, havizuiliwi, na havigusiwi na "Daily Cutoff".</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SEHEMU YA 3: MAJINA YA WATEJA -->
+          <div class="card" style="margin-bottom:24px; border-left:4px solid var(--purple); padding:20px;">
+            <div class="label"
+              style="color:var(--purple); font-size:18px; margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+              3. Kubadili Majina ya Wateja (Custom Names)
+            </div>
+            <p style="font-size:14px; line-height:1.7; color:var(--t)">
+              Simu nyingi ukiwa mtandaoni zina majina magumu (mfano "android-1a2b3c"). Sasa unaweza kuwapa majina
+              unayoyatambua kwa urahisi:
+            </p>
+            <ul style="margin:12px 0 0 20px; font-size:14px; line-height:1.8; color:var(--t)">
+              <li><strong>Jinsi ya Kubadili:</strong> Bofya/Gusa jina lolote la kifaa lenye mstari wa nukta (dotted
+                line) kwa chini kwenye dashibodi. Andika jina jipya (Mfano: "Mzee wa Kijiweni") kisha hifadhi.</li>
+              <li><strong>Inavyofanya Kazi:</strong> Mfumo utakumbuka jina hilo milele. Kila mara mteja huyo akirudi,
+                utamuona kwa jina zuri ulilompa, inarahisisha sana kuwatambua wateja wako.</li>
+              <li><strong>Alama ya "OFFLINE":</strong> Kifaa kikiondoka kwenye WiFi yako au kikizima internet(WIFI),
+                utaona alama ya <span
+                  style="font-size:10px;padding:2px 6px;background:rgba(255,255,255,0.06);color:var(--td);border-radius:4px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Offline</span>
+                pembeni ya jina lake. Hii inakusaidia kujua moja kwa moja nani yupo mtandaoni na nani ameondoka.</li>
+              <li><strong>Kufuta:</strong> Bofya tena kwenye jina hilo, futa maandishi yote na uhifadhi, simu itarudi
+                kutumia jina lake la asili.</li>
+            </ul>
+          </div>
+
+          <!-- SEHEMU YA 4: VOCHA -->
+          <div class="card" style="margin-bottom:24px; border-left:4px solid var(--green); padding:20px;">
+            <div class="label"
+              style="color:var(--green); font-size:18px; margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+              4. Kutengeneza Vocha na QR Codes
+            </div>
+            <p style="font-size:14px; line-height:1.7; color:var(--t)">
+              Ukurasa wa <strong>"QR Codes"</strong> ni kwa ajili ya kutengeneza vocha za kuuza kwa wateja kwa njia ya
+              karatasi au kuwapa kwa simu:
+            </p>
+            <ul style="margin:12px 0 0 20px; font-size:14px; line-height:1.8; color:var(--t)">
+              <li><strong>Tengeneza Haraka:</strong> Chagua kiasi cha pesa (mfano: 500) na masaa ya kutumika (mfano:
+                12), kisha bonyeza "Ongeza Vocha".</li>
+              <li><strong>Uza kwa QR Code:</strong> Mteja ana-scan QR Code ili kuunganisha WiFi, kisha akiingia kwenye
+                browser, anaweka namba ya vocha kupata internet.</li>
+              <li><strong>Chapisha (Print):</strong> Kitufe cha "Print(Chapisha)" kinakuruhusu kutoa karatasi za vocha
+                ambazo hazijatumika ili uweze kusambaza na kuuza.</li>
+            </ul>
+          </div>
+
+          <!-- SEHEMU YA 5: DAILY CUTOFF -->
+          <div class="card" style="margin-bottom:24px; border-left:4px solid var(--orange); padding:20px;">
+            <div class="label"
+              style="color:var(--orange); font-size:18px; margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+              5. Muda wa Kumaliza (Daily Cutoff)
+            </div>
+            <p style="font-size:14px; line-height:1.7; color:var(--t)">
+              Hii ni siri kubwa ya kuongeza mauzo! Mfumo hukuruhusu kuweka saa maalum (Mfano: asubuhi saa 2:00) ambapo
+              <strong>vouchers zote zilizokuwa hewani zinakatika kwa wakati mmoja</strong>.
+            </p>
+            <p style="font-size:14px; line-height:1.7; color:var(--td); font-style:italic; margin-top:8px;">
+              <strong>Kwa Nini Ni Muhimu?</strong> Hii inazuia wateja kununua vocha jioni na kuitumia mpaka mchana wa
+              siku inayofuata. Wateja wote watalazimika kununua vocha mpya kuanza siku yao, bila kujali walinunua saa
+              ngapi jana.
+            </p>
+          </div>
+
+          <!-- SEHEMU YA 6: BEI YA FUNGUA -->
+          <div class="card" style="margin-bottom:24px; border-left:4px solid var(--red); padding:20px;">
+            <div class="label"
+              style="color:var(--red); font-size:18px; margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+              6. Gharama ya Fungua (Unblock Price)
+            </div>
+            <p style="font-size:14px; line-height:1.7; color:var(--t)">
+              Unapompa mtu internet bila vocha (kwa kubonyeza kitufe cha "Fungua"), mfumo unarekodi tukio hilo kama
+              mauzo ili hesabu zako zikae sawa.
+            </p>
+            <ul style="margin:12px 0 0 20px; font-size:14px; line-height:1.8; color:var(--t)">
+              <li><strong>Panga Bei Yako:</strong> Nenda kwenye ukurasa wa <strong>"Mipangilio"</strong> na uweke kiasi
+                kwenye sehemu ya "Gharama ya Fungua". Mfano ukiweka 1000, kila ukifungua mtu manually itahesabika umeuza
+                Tsh 1,000.</li>
+              <li><strong>Hesabu Kamili:</strong> Hii inahakikisha kwamba unajua thamani ya internet yote uliyotoa bila
+                vocha unaposoma ripoti ya mapato yako.</li>
+            </ul>
+          </div>
+
+          <!-- SEHEMU YA 7: WATUMIAJI MARA KWA MARA -->
+          <div class="card" style="margin-bottom:24px; border-left:4px solid var(--accent); padding:20px;">
+            <div class="label"
+              style="color:var(--accent); font-size:18px; margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+              7. Watumiaji wa Mara kwa Mara (Loyal Customers)
+            </div>
+            <p style="font-size:14px; line-height:1.7; color:var(--t)">
+              Ukurasa wa <strong>"Wateja"</strong> unakusaidia kuwajua wateja wako vizuri zaidi:
+            </p>
+            <div style="background:var(--s1); padding:16px; border-radius:8px; margin-top:12px;">
+              <ul style="margin:0; padding-left:20px; font-size:14px; line-height:1.8; color:var(--t)">
+                <li><strong>Ripoti Kamili:</strong> Utamuona kila mteja na mara ngapi amenunua vocha / ameunganishwa
+                  mpaka sasa.</li>
+                <li><strong>Wateja Bora (Tiers):</strong> Mfumo unawapa rangi tofauti; wateja wa "Kijani" ndio wateja
+                  wako wakubwa (mara 5 na zaidi), na wateja "Wekundu" ni watumiaji wapya. Hii inakusaidia kuwajua
+                  mashabiki wakubwa wa WiFi yako!</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
   </div>
 
-  <!-- Voucher Codes Grid -->
-  <div id="voucherCodesGrid" class="code-grid">
-    <p class="empty">Bado hakuna voucher codes. Tumia fomu hapo juu kutengeneza!</p>
-  </div>
-</div>
+  <script>
+    const API = '';
+    let ws;
+    let adminToken = sessionStorage.getItem('hz_admin_token') || '';
 
-<!-- Mipangilio -->
-<div class="page" id="page-settings">
-  <h2>Mipangilio</h2>
-  <div style="max-width:600px">
-    <div class="card" style="margin-bottom:16px"><div class="label" style="margin-bottom:12px">Router Configuration</div>
-      <div class="form-group"><label>Router IP</label><input id="cfgRouterIp"></div>
-      <div class="form-row"><div class="form-group"><label>Username</label><input id="cfgRouterUser"></div>
-      <div class="form-group"><label>Password</label><input id="cfgRouterPass" type="password"></div></div>
-      <div class="form-group"><label>Playwright Automation</label><select id="cfgPlaywright"><option value="true">Imewashwa</option><option value="false">Imezimwa</option></select></div>
-    </div>
-    <div class="card" style="margin-bottom:16px"><div class="label" style="margin-bottom:12px">Server Settings</div>
-      <div class="form-row"><div class="form-group"><label>Server IP (mashine hii)</label><input id="cfgServerIp"></div>
-      <div class="form-group"><label>Admin PIN (Namba 4)</label><input id="cfgAdminPin" type="password" placeholder="2004" maxlength="4" inputmode="numeric"></div></div>
-    </div>
-    <div class="card" style="margin-bottom:16px"><div class="label" style="margin-bottom:12px">WiFi Network (kwa QR Connect)</div>
-      <div class="form-group"><label>WiFi SSID (Jina la Network)</label><input id="cfgWifiSSID" placeholder="HotZone WiFi"></div>
-      <div class="form-row"><div class="form-group"><label>WiFi Password</label><input id="cfgWifiPassword" type="password"></div>
-      <div class="form-group"><label>Security</label><select id="cfgWifiSecurity"><option value="WPA">WPA/WPA2</option><option value="WEP">WEP</option><option value="nopass">Wazi (Bila Password)</option></select></div></div>
-    </div>
-    <div style="display:flex;gap:12px;margin-top:16px">
-      <button class="btn primary" id="saveSettingsBtn" onclick="saveSettings()">Hifadhi Mipangilio</button>
-      <button class="btn danger" id="resetRevenueBtn" onclick="resetRevenue()">🗑️ Futa Rekodi za Mapato (Reset)</button>
-    </div>
-  </div>
-</div>
-</main>
-</div>
+    // ─── PIN Authentication ───
+    (async function checkAuth() {
+      if (adminToken) {
+        try {
+          const r = await fetch(API + '/api/admin/check', { headers: { 'X-Admin-Token': adminToken } });
+          if (r.ok) { unlockAdmin(); return; }
+        } catch (e) { }
+        sessionStorage.removeItem('hz_admin_token');
+        adminToken = '';
+      }
+      setupPinInputs();
+    })();
 
-<script>
-const API='';
-let ws;
-let adminToken = sessionStorage.getItem('hz_admin_token') || '';
-
-// ─── PIN Authentication ───
-(async function checkAuth(){
-  if(adminToken){
-    try{
-      const r=await fetch(API+'/api/admin/check',{headers:{'X-Admin-Token':adminToken}});
-      if(r.ok){unlockAdmin();return;}
-    }catch(e){}
-    sessionStorage.removeItem('hz_admin_token');
-    adminToken='';
-  }
-  setupPinInputs();
-})();
-
-function setupPinInputs(){
-  const digits=[1,2,3,4].map(i=>document.getElementById('pin'+i));
-  digits[0].focus();
-  digits.forEach((inp,i)=>{
-    inp.addEventListener('input',()=>{
-      inp.value=inp.value.replace(/\D/g,'').slice(-1);
-      if(inp.value){inp.classList.add('filled');if(i<3)digits[i+1].focus();}
-      else{inp.classList.remove('filled');}
-      // Auto-submit when all 4 filled
-      if(digits.every(d=>d.value))submitPin(digits);
-    });
-    inp.addEventListener('keydown',(e)=>{
-      if(e.key==='Backspace'&&!inp.value&&i>0){digits[i-1].focus();digits[i-1].value='';digits[i-1].classList.remove('filled');}
-    });
-    inp.addEventListener('paste',(e)=>{
-      e.preventDefault();
-      const paste=(e.clipboardData||window.clipboardData).getData('text').replace(/\D/g,'').slice(0,4);
-      paste.split('').forEach((ch,j)=>{if(digits[j]){digits[j].value=ch;digits[j].classList.add('filled');}});
-      if(paste.length===4)submitPin(digits);
-      else if(digits[paste.length])digits[paste.length].focus();
-    });
-  });
-}
-
-async function submitPin(digits){
-  const pin=digits.map(d=>d.value).join('');
-  try{
-    const r=await fetch(API+'/api/admin/verify-pin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin})});
-    if(r.ok){
-      const data=await r.json();
-      adminToken=data.token;
-      sessionStorage.setItem('hz_admin_token',adminToken);
-      unlockAdmin();
-    }else{
-      pinError();
+    function setupPinInputs() {
+      const digits = [1, 2, 3, 4].map(i => document.getElementById('pin' + i));
+      digits[0].focus();
+      digits.forEach((inp, i) => {
+        inp.addEventListener('input', () => {
+          inp.value = inp.value.replace(/\D/g, '').slice(-1);
+          if (inp.value) { inp.classList.add('filled'); if (i < 3) digits[i + 1].focus(); }
+          else { inp.classList.remove('filled'); }
+          // Auto-submit when all 4 filled
+          if (digits.every(d => d.value)) submitPin(digits);
+        });
+        inp.addEventListener('keydown', (e) => {
+          if (e.key === 'Backspace' && !inp.value && i > 0) { digits[i - 1].focus(); digits[i - 1].value = ''; digits[i - 1].classList.remove('filled'); }
+        });
+        inp.addEventListener('paste', (e) => {
+          e.preventDefault();
+          const paste = (e.clipboardData || window.clipboardData).getData('text').replace(/\D/g, '').slice(0, 4);
+          paste.split('').forEach((ch, j) => { if (digits[j]) { digits[j].value = ch; digits[j].classList.add('filled'); } });
+          if (paste.length === 4) submitPin(digits);
+          else if (digits[paste.length]) digits[paste.length].focus();
+        });
+      });
     }
-  }catch(e){pinError();}
-}
 
-function pinError(){
-  const box=document.getElementById('pinDigits');
-  const err=document.getElementById('pinError');
-  box.classList.add('shake');
-  err.classList.add('show');
-  setTimeout(()=>{
-    box.classList.remove('shake');
-    const digits=[1,2,3,4].map(i=>document.getElementById('pin'+i));
-    digits.forEach(d=>{d.value='';d.classList.remove('filled');});
-    digits[0].focus();
-  },500);
-  setTimeout(()=>err.classList.remove('show'),3000);
-}
-
-function unlockAdmin(){
-  document.getElementById('pinOverlay').classList.add('hidden');
-  document.getElementById('adminLayout').style.display='';
-  const lastPage = sessionStorage.getItem('hz_active_page') || 'dashboard';
-  showPage(lastPage);
-  connectWS();
-}
-
-function showPage(id){
-  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n=>{
-    n.classList.remove('active');
-    if(n.getAttribute('data-page')===id)n.classList.add('active');
-  });
-  document.getElementById('page-'+id).classList.add('active');
-  sessionStorage.setItem('hz_active_page', id);
-  refreshCurrentPage();
-}
-
-function refreshCurrentPage(){
-  const p = sessionStorage.getItem('hz_active_page') || 'dashboard';
-  if(p==='dashboard')loadDashboard();
-  if(p==='activeaccess')refreshActiveAccess();
-  if(p==='devices')refreshDevices();
-  if(p==='vouchers')loadVouchers();
-  if(p==='qrcodes')loadVoucherCodes();
-  if(p==='whitelist')loadWhitelist();
-  if(p==='settings')loadSettings();
-}
-
-function toast(msg,type='info'){
-  const c=document.getElementById('toastContainer');
-  const t=document.createElement('div');t.className='toast '+type;t.textContent=msg;c.appendChild(t);
-  setTimeout(()=>t.remove(),4000);
-}
-
-function fmtTime(sec){
-  if(!sec||sec<=0)return'—';
-  const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=Math.floor(sec%60);
-  return`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-}
-
-function fmtCurrency(n){return new Intl.NumberFormat('en-TZ').format(n)+' TZS';}
-
-function fmtDate(iso){
-  if(!iso)return'—';
-  try{return new Date(iso).toLocaleString('en-GB',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}catch(e){return iso}
-}
-
-// --- Activity indicator helpers ---
-function showActivity(msg){
-  document.getElementById('adminLayout').style.pointerEvents='none';
-  document.getElementById('adminLayout').style.opacity='0.6';
-  const b=document.getElementById('activityBar');
-  document.getElementById('activityText').textContent=msg;
-  b.classList.remove('hidden');
-}
-function hideActivity(){
-  document.getElementById('adminLayout').style.pointerEvents='';
-  document.getElementById('adminLayout').style.opacity='';
-  document.getElementById('activityBar').classList.add('hidden');
-}
-function btnLoading(btn,loading,origText){
-  if(!btn)return;
-  if(loading){btn.classList.add('loading');if(origText)btn.textContent=origText;}
-  else{btn.classList.remove('loading');}
-}
-
-// --- Retry helper: retries fetch until server is ready (handles slow Windows startup) ---
-async function fetchRetry(url, options, retries=8, delay=3000){
-  for(let i=0;i<retries;i++){
-    try{
-      const r=await fetch(url,options);
-      if(r.ok)return r;
-      throw new Error('HTTP '+r.status);
-    }catch(e){
-      if(i===retries-1)throw e;
-      await new Promise(ok=>setTimeout(ok,delay));
+    async function submitPin(digits) {
+      const pin = digits.map(d => d.value).join('');
+      try {
+        const r = await fetch(API + '/api/admin/verify-pin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }) });
+        if (r.ok) {
+          const data = await r.json();
+          adminToken = data.token;
+          sessionStorage.setItem('hz_admin_token', adminToken);
+          unlockAdmin();
+        } else {
+          pinError();
+        }
+      } catch (e) { pinError(); }
     }
-  }
-}
 
-// Dashboard
-async function loadDashboard(){
-  document.getElementById('revToday').innerHTML='<span class="activity-spinner" style="display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;margin-top:6px"></span>';
-  document.getElementById('revAll').innerHTML='<span class="activity-spinner" style="display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;margin-top:6px"></span>';
-  document.getElementById('activeCount').innerHTML='<span class="activity-spinner" style="display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;margin-top:6px"></span>';
-
-  const tb=document.getElementById('dashVouchers');
-  tb.innerHTML='<tr class="table-loading"><td colspan="6" style="text-align:center;padding:24px;color:var(--td)"><span style="display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;margin-right:8px"></span>Loading dashboard...</td></tr>';
-  try{
-    const[rev,vouchers]=await Promise.all([fetchRetry(API+'/api/revenue').then(r=>r.json()),fetchRetry(API+'/api/vouchers').then(r=>r.json())]);
-    document.getElementById('revToday').textContent=fmtCurrency(rev.today);
-    document.getElementById('revAll').textContent=fmtCurrency(rev.all_time);
-    document.getElementById('activeCount').textContent=rev.active_count;
-    const recent=vouchers.slice(-5).reverse();
-    if(!recent.length){tb.innerHTML='<tr><td colspan="6" class="empty">Bado hakuna vouchers</td></tr>';return;}
-    tb.innerHTML=recent.map(v=>`<tr><td>${v.id}</td><td>${v.phone||'—'}</td><td style="font-size:11px">${v.mac}</td><td><span class="badge ${v.status}">${v.status}</span></td><td class="timer">${fmtTime(v.time_remaining)}</td><td>${fmtDate(v.created)}</td></tr>`).join('');
-  }catch(e){console.error(e);tb.innerHTML='<tr><td colspan="6" class="empty" style="color:var(--red)">Imeshindikana kupakia dashibodi</td></tr>';}
-}
-
-// Devices
-async function refreshDevices(){
-  const btn=document.getElementById('refreshBtn');
-  btnLoading(btn,true);
-  const tb=document.getElementById('devicesTable');
-  
-  const loadingMessages = [
-    "Inavuta taarifa za vifaa haraka..."
-  ];
-  let msgIndex = 0;
-  
-  tb.innerHTML=`<tr class="table-loading"><td colspan="6" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div id="loadingStatusText" style="font-size:14px;font-weight:600;color:var(--accent)">Inavuta taarifa...</div></td></tr>`;
-  
-  const statusEl = document.getElementById('loadingStatusText');
-  const msgTimer = setInterval(() => {
-    if (statusEl) {
-      msgIndex = (msgIndex + 1) % loadingMessages.length;
-      statusEl.textContent = loadingMessages[msgIndex];
+    function pinError() {
+      const box = document.getElementById('pinDigits');
+      const err = document.getElementById('pinError');
+      box.classList.add('shake');
+      err.classList.add('show');
+      setTimeout(() => {
+        box.classList.remove('shake');
+        const digits = [1, 2, 3, 4].map(i => document.getElementById('pin' + i));
+        digits.forEach(d => { d.value = ''; d.classList.remove('filled'); });
+        digits[0].focus();
+      }, 500);
+      setTimeout(() => err.classList.remove('show'), 3000);
     }
-  }, 1000);
 
-  try{
-    const res=await fetchRetry(API+'/api/devices').then(r=>r.json());
-    clearInterval(msgTimer);
-    
-    // Handle server still loading (initial scrape not done)
-    if(res.loading){
-      tb.innerHTML='<tr class="table-loading"><td colspan="6" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div style="font-size:14px;font-weight:600;color:var(--accent)">Mfumo unajiandaa... inatafuta vifaa kwenye router</div><div style="font-size:11px;color:var(--td);margin-top:8px">Tafadhali subiri sekunde chache, utaona vifaa hivi karibuni</div></td></tr>';
-      btnLoading(btn,false);
-      setTimeout(()=>refreshDevices(),5000);
-      return;
+    function unlockAdmin() {
+      document.getElementById('pinOverlay').classList.add('hidden');
+      document.getElementById('adminLayout').style.display = '';
+      const lastPage = sessionStorage.getItem('hz_active_page') || 'dashboard';
+      showPage(lastPage);
+      connectWS();
     }
-    
-    const devs=res.devices||res;
-    document.getElementById('deviceCount').textContent=devs.length;
-    if(!devs.length){tb.innerHTML='<tr><td colspan="6" class="empty">Hakuna vifaa vilivyopatikana ndani ya router.</td></tr>';return;}
-    tb.innerHTML=devs.map(d=>`<tr>
-      <td>${d.host||'—'}</td><td style="font-size:11px">${d.mac}</td><td>${d.ip}</td>
-      <td><span class="badge ${d.status}">${d.status==='unauthorized_allowed'?'IMEUNGANISHWA (LEAK)':d.status==='pending'?'Inasubiri...':d.status==='blocking'?'Inazuia...':d.status}</span></td>
-      <td class="timer">${d.status==='active' ? fmtTime(d.time_remaining) : '—'}</td>
-      <td>${d.status==='whitelisted'?'<span style="font-size:11px;color:var(--td)">Kimelindwa</span>':d.status==='unauthorized_allowed'?
-        `<div style="display:flex;gap:4px">
+
+    function showPage(id) {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach(n => {
+        n.classList.remove('active');
+        if (n.getAttribute('data-page') === id) n.classList.add('active');
+      });
+      document.getElementById('page-' + id).classList.add('active');
+      sessionStorage.setItem('hz_active_page', id);
+      refreshCurrentPage();
+    }
+
+    function refreshCurrentPage() {
+      const p = sessionStorage.getItem('hz_active_page') || 'dashboard';
+      if (p === 'dashboard') loadDashboard();
+      if (p === 'activeaccess') refreshActiveAccess();
+      if (p === 'devices') refreshDevices();
+      if (p === 'customers') loadCustomers();
+      if (p === 'vouchers') loadVouchers();
+      if (p === 'qrcodes') loadVoucherCodes();
+      if (p === 'whitelist') loadWhitelist();
+      if (p === 'settings') loadSettings();
+      if (p === 'manual') { /* Static page, no load needed */ }
+    }
+
+    function toast(msg, type = 'info') {
+      const c = document.getElementById('toastContainer');
+      const t = document.createElement('div'); t.className = 'toast ' + type; t.textContent = msg; c.appendChild(t);
+      setTimeout(() => t.remove(), 4000);
+    }
+
+    function fmtTime(sec) {
+      if (!sec || sec <= 0) return '—';
+      const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+
+    function fmtCurrency(n) { return new Intl.NumberFormat('en-TZ').format(n) + ' TZS'; }
+
+    function fmtDate(iso) {
+      if (!iso) return '—';
+      try { return new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) } catch (e) { return iso }
+    }
+
+    // --- Nickname Editor ---
+    let _currentNicknameMac = null;
+
+    function editNickname(mac, currentNick, hostname) {
+      _currentNicknameMac = mac;
+      document.getElementById('nickMacDisp').textContent = mac.slice(-8);
+      const input = document.getElementById('nicknameInput');
+      input.value = currentNick || '';
+      const modal = document.getElementById('nicknameModal');
+      modal.style.display = 'flex';
+
+      setTimeout(() => {
+        modal.style.opacity = '1';
+        modal.children[0].style.transform = 'translateY(0)';
+        input.focus();
+        input.select();
+      }, 10);
+    }
+
+    function closeNicknameModal() {
+      const modal = document.getElementById('nicknameModal');
+      modal.style.opacity = '0';
+      modal.children[0].style.transform = 'translateY(20px)';
+      setTimeout(() => {
+        modal.style.display = 'none';
+        _currentNicknameMac = null;
+      }, 200);
+    }
+
+    async function submitNickname() {
+      if (!_currentNicknameMac) return;
+      const mac = _currentNicknameMac;
+      const newNick = document.getElementById('nicknameInput').value.trim();
+      closeNicknameModal();
+
+      showActivity('⏳ Inabadilisha jina...');
+      try {
+        const r = await fetch(API + '/api/device-nicknames/' + encodeURIComponent(mac), {
+          method: newNick ? 'POST' : 'DELETE',
+          headers: newNick ? { 'Content-Type': 'application/json' } : undefined,
+          body: newNick ? JSON.stringify({ nickname: newNick }) : undefined
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        toast(newNick ? '✅ Jina limebadilishwa!' : '🗑️ Jina limefutwa', 'success');
+      } catch (e) { toast('Imeshindikana: ' + e.message, 'error'); }
+      finally { hideActivity(); refreshCurrentPage(); }
+    }
+    function renderName(mac, nickname, hostname) {
+      const isOffline = (hostname === 'Offline' || hostname === '—');
+      const actualHost = isOffline ? '' : hostname;
+      const display = nickname || actualHost || 'Kifaa (' + mac.slice(-5) + ')';
+      const color = nickname ? 'var(--accent)' : 'var(--t)';
+      const weight = nickname ? '700' : '600';
+
+      let html = `<span style="cursor:pointer;color:${color};font-weight:${weight};text-decoration:underline;text-decoration-style:dotted;text-decoration-color:var(--td)" onclick="editNickname('${mac}','${(nickname || '').replace(/'/g, "\\'")}','${(actualHost || '').replace(/'/g, "\\'")}')" title="Bonyeza kubadili jina (MAC: ${mac})">${display}</span>`;
+
+      if (isOffline) {
+        html += ` <span style="font-size:10px;padding:2px 6px;background:rgba(255,255,255,0.06);color:var(--td);border-radius:4px;margin-left:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px">Offline</span>`;
+      }
+
+      return html;
+    }
+
+    // --- Activity indicator helpers ---
+    function showActivity(msg) {
+      document.getElementById('adminLayout').style.pointerEvents = 'none';
+      document.getElementById('adminLayout').style.opacity = '0.6';
+      const b = document.getElementById('activityBar');
+      document.getElementById('activityText').textContent = msg;
+      b.classList.remove('hidden');
+    }
+    function hideActivity() {
+      document.getElementById('adminLayout').style.pointerEvents = '';
+      document.getElementById('adminLayout').style.opacity = '';
+      document.getElementById('activityBar').classList.add('hidden');
+    }
+    function btnLoading(btn, loading, origText) {
+      if (!btn) return;
+      if (loading) { btn.classList.add('loading'); if (origText) btn.textContent = origText; }
+      else { btn.classList.remove('loading'); }
+    }
+
+    // --- Retry helper: retries fetch until server is ready (handles slow Windows startup) ---
+    async function fetchRetry(url, options, retries = 8, delay = 3000) {
+      for (let i = 0; i < retries; i++) {
+        try {
+          const r = await fetch(url, options);
+          if (r.ok) return r;
+          throw new Error('HTTP ' + r.status);
+        } catch (e) {
+          if (i === retries - 1) throw e;
+          await new Promise(ok => setTimeout(ok, delay));
+        }
+      }
+    }
+
+    // Dashboard
+    async function loadDashboard() {
+      // Show spinners
+      ['revToday', 'revWeek', 'revMonth', 'revAll', 'activeCount'].forEach(id => {
+        document.getElementById(id).innerHTML = '<span class="activity-spinner" style="display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;margin-top:6px"></span>';
+      });
+
+      const tb = document.getElementById('dashVouchers');
+      tb.innerHTML = '<tr class="table-loading"><td colspan="6" style="text-align:center;padding:24px;color:var(--td)"><span style="display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;margin-right:8px"></span>Loading dashboard...</td></tr>';
+      try {
+        const [rev, vouchers, custData] = await Promise.all([
+          fetchRetry(API + '/api/revenue').then(r => r.json()),
+          fetchRetry(API + '/api/vouchers').then(r => r.json()),
+          fetchRetry(API + '/api/analytics/customers').then(r => r.json()).catch(() => ({ customers: [], summary: { high: 0, medium: 0, low: 0 } }))
+        ]);
+        document.getElementById('revToday').textContent = fmtCurrency(rev.today);
+        document.getElementById('revWeek').textContent = fmtCurrency(rev.week);
+        document.getElementById('revMonth').textContent = fmtCurrency(rev.month);
+        document.getElementById('revAll').textContent = fmtCurrency(rev.all_time);
+        document.getElementById('activeCount').textContent = rev.active_count;
+
+        // Cutoff banner
+        const cutoffBanner = document.getElementById('cutoffBanner');
+        if (rev.daily_cutoff && rev.next_cutoff) {
+          const nextCut = new Date(rev.next_cutoff);
+          const now = new Date();
+          const diff = Math.max(0, Math.floor((nextCut - now) / 1000));
+          cutoffBanner.style.display = 'block';
+          cutoffBanner.innerHTML = `<div class="cutoff-indicator">🕐 Cutoff: ${rev.daily_cutoff} — <span>Vouchers zote zitamalizika baada ya ${fmtTime(diff)}</span></div>`;
+        } else {
+          cutoffBanner.style.display = 'none';
+        }
+
+        // 7-Day Revenue Chart
+        const chartEl = document.getElementById('revenueChart');
+        if (rev.daily_revenue && rev.daily_revenue.length) {
+          const maxRev = Math.max(...rev.daily_revenue.map(d => d.amount), 1);
+          chartEl.innerHTML = rev.daily_revenue.map(d => {
+            const h = Math.max(4, (d.amount / maxRev) * 100);
+            const isToday = d === rev.daily_revenue[rev.daily_revenue.length - 1];
+            const color = isToday ? 'linear-gradient(180deg,#6c5ce7,#a855f7)' : 'linear-gradient(180deg,rgba(108,92,231,.5),rgba(108,92,231,.3))';
+            return `<div class="bar-col">
+          <div class="bar-value">${d.amount > 0 ? new Intl.NumberFormat('en-TZ', { notation: 'compact' }).format(d.amount) : ''}</div>
+          <div class="bar" style="height:${h}%;background:${color}" title="${d.date_full}: ${fmtCurrency(d.amount)}"></div>
+          <div class="bar-label">${d.date}</div>
+        </div>`;
+          }).join('');
+        }
+
+        // Peak Hours Chart
+        const peakEl = document.getElementById('peakHoursChart');
+        if (rev.peak_hours) {
+          const maxH = Math.max(...rev.peak_hours, 1);
+          peakEl.innerHTML = rev.peak_hours.map((count, i) => {
+            const h = Math.max(2, (count / maxH) * 100);
+            const color = count === maxH && count > 0 ? 'var(--green)' : 'rgba(0,210,160,.3)';
+            const show = i % 3 === 0 || count > 0;
+            return `<div class="bar-col">
+          <div class="bar-value">${count > 0 ? count : ''}</div>
+          <div class="bar" style="height:${h}%;background:${color}" title="${String(i).padStart(2, '0')}:00 - ${count} vouchers"></div>
+          <div class="bar-label">${show ? String(i).padStart(2, '0') : ''}</div>
+        </div>`;
+          }).join('');
+        }
+
+        // Customer tier summary on dashboard
+        const s = custData.summary || {};
+        document.getElementById('dashHigh').textContent = s.high || 0;
+        document.getElementById('dashMedium').textContent = s.medium || 0;
+        document.getElementById('dashLow').textContent = s.low || 0;
+
+        // Vouchers table
+        const recent = vouchers.slice(-5).reverse();
+        if (!recent.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">Bado hakuna vouchers</td></tr>'; return; }
+        tb.innerHTML = recent.map(v => `<tr><td>${v.id}</td><td>${v.phone || '—'}</td><td style="font-size:11px">${v.mac}</td><td><span class="badge ${v.status}">${v.status}</span></td><td class="timer">${fmtTime(v.time_remaining)}</td><td>${fmtDate(v.created)}</td></tr>`).join('');
+      } catch (e) { console.error(e); tb.innerHTML = '<tr><td colspan="6" class="empty" style="color:var(--red)">Imeshindikana kupakia dashibodi</td></tr>'; }
+    }
+
+    // Customer Analytics
+    let _cachedCustomers = null;
+    async function loadCustomers() {
+      const tb = document.getElementById('customersTable');
+      const filter = document.getElementById('tierFilter')?.value || 'all';
+      tb.innerHTML = '<tr class="table-loading"><td colspan="6" style="text-align:center;padding:24px;color:var(--td)"><span style="display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;margin-right:8px"></span>Inapakia wateja...</td></tr>';
+      try {
+        const data = await fetchRetry(API + '/api/analytics/customers').then(r => r.json());
+        _cachedCustomers = data;
+        const s = data.summary || {};
+        document.getElementById('tierHigh').textContent = s.high || 0;
+        document.getElementById('tierMedium').textContent = s.medium || 0;
+        document.getElementById('tierLow').textContent = s.low || 0;
+
+        let customers = data.customers || [];
+        if (filter !== 'all') customers = customers.filter(c => c.tier === filter);
+
+        if (!customers.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">Hakuna wateja' + (filter !== 'all' ? ' katika kiwango hiki' : '') + '</td></tr>'; return; }
+        tb.innerHTML = customers.map(c => {
+          const tierBadge = c.tier === 'high' ? '<span class="badge tier-high">🟢 Juu</span>' :
+            c.tier === 'medium' ? '<span class="badge tier-medium">🟡 Kati</span>' :
+              '<span class="badge tier-low">🔴 Chini</span>';
+          return `<tr>
+        <td>${renderName(c.mac, c.nickname, c.hostname)}</td>
+        <td style="font-size:11px">${c.mac}</td>
+        <td style="font-weight:700;text-align:center">${c.total_purchases}</td>
+        <td>${fmtCurrency(c.total_spent)}</td>
+        <td>${tierBadge}</td>
+        <td>${c.last_seen ? fmtDate(c.last_seen) : '—'}</td>
+      </tr>`;
+        }).join('');
+      } catch (e) { console.error(e); tb.innerHTML = '<tr><td colspan="6" class="empty" style="color:var(--red)">Imeshindikana kupakia wateja</td></tr>'; }
+    }
+
+    // Devices
+    async function refreshDevices() {
+      const btn = document.getElementById('refreshBtn');
+      btnLoading(btn, true);
+      const tb = document.getElementById('devicesTable');
+
+      const loadingMessages = [
+        "Inavuta taarifa za vifaa haraka..."
+      ];
+      let msgIndex = 0;
+
+      tb.innerHTML = `<tr class="table-loading"><td colspan="6" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div id="loadingStatusText" style="font-size:14px;font-weight:600;color:var(--accent)">Inavuta taarifa...</div></td></tr>`;
+
+      const statusEl = document.getElementById('loadingStatusText');
+      const msgTimer = setInterval(() => {
+        if (statusEl) {
+          msgIndex = (msgIndex + 1) % loadingMessages.length;
+          statusEl.textContent = loadingMessages[msgIndex];
+        }
+      }, 1000);
+
+      try {
+        const res = await fetchRetry(API + '/api/devices').then(r => r.json());
+        clearInterval(msgTimer);
+
+        // Handle server still loading (initial scrape not done)
+        if (res.loading) {
+          tb.innerHTML = '<tr class="table-loading"><td colspan="6" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div style="font-size:14px;font-weight:600;color:var(--accent)">Mfumo unajiandaa... inatafuta vifaa kwenye router</div><div style="font-size:11px;color:var(--td);margin-top:8px">Tafadhali subiri sekunde chache, utaona vifaa hivi karibuni</div></td></tr>';
+          btnLoading(btn, false);
+          setTimeout(() => refreshDevices(), 5000);
+          return;
+        }
+
+        const devs = res.devices || res;
+        document.getElementById('deviceCount').textContent = devs.length;
+        if (!devs.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">Hakuna vifaa vilivyopatikana ndani ya router.</td></tr>'; return; }
+        tb.innerHTML = devs.map(d => `<tr>
+      <td>${renderName(d.mac, d.nickname, d.host)}</td><td style="font-size:11px">${d.mac}</td><td>${d.ip}</td>
+      <td><span class="badge ${d.status}">${d.status === 'unauthorized_allowed' ? 'IMEUNGANISHWA (LEAK)' : d.status === 'pending' ? 'Inasubiri...' : d.status === 'blocking' ? 'Inazuia...' : d.status}</span></td>
+      <td class="timer">${d.status === 'active' ? fmtTime(d.time_remaining) : '—'}</td>
+      <td>${d.status === 'whitelisted' ? '<span style="font-size:11px;color:var(--td)">Kimelindwa</span>' : d.status === 'unauthorized_allowed' ?
+            `<div style="display:flex;gap:4px">
           <button class="btn sm danger" onclick="blockDev('${d.mac}',this)">🚫 Zuia</button>
-          <button class="btn sm primary" style="background:var(--ag);color:var(--accent);border-color:transparent" onclick="quickWhitelist('${d.mac}','${d.host||''}',this)">🛡️ Whitelist</button>
         </div>`:
-        `<div style="display:flex;gap:4px">
-          ${d.status==='active'?
-          `<button class="btn sm danger" onclick="blockDev('${d.mac}',this)">🚫 Zuia</button>`:
-          `<button class="btn sm" onclick="unblockDev('${d.mac}',this)">✅ Fungua</button>`}
-          <button class="btn sm primary" style="background:var(--ag);color:var(--accent);border-color:transparent" onclick="quickWhitelist('${d.mac}','${d.host||''}',this)">🛡️ Whitelist</button>
+            `<div style="display:flex;gap:4px">
+          ${d.status === 'active' ?
+              `<button class="btn sm danger" onclick="blockDev('${d.mac}',this)">🚫 Zuia</button>` :
+              `<button class="btn sm" onclick="unblockDev('${d.mac}',this)">✅ Fungua</button>`}
         </div>`
-      }</td>
+          }</td>
     </tr>`).join('');
-  }catch(e){
-    clearInterval(msgTimer);
-    console.error(e);
-    tb.innerHTML='<tr><td colspan="6" class="empty" style="color:var(--red)">Imeshindikana kupakia vifaa. Jaribu kuonyesha upya.</td></tr>';
-  }
-  finally{btnLoading(btn,false); clearInterval(msgTimer);}
-}
-
-// Active Access
-async function refreshActiveAccess(){
-  const btn=document.getElementById('refreshActiveBtn');
-  btnLoading(btn,true);
-  const tb=document.getElementById('activeAccessTable');
-  tb.innerHTML='<tr class="table-loading"><td colspan="5" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div style="font-size:14px;font-weight:600;color:var(--accent)">Inasoma vifaa vyenye mtandao...</div></td></tr>';
-  
-  try{
-    const res=await fetchRetry(API+'/api/devices').then(r=>r.json());
-    
-    // Handle server still loading (initial scrape not done)
-    if(res.loading){
-      tb.innerHTML='<tr class="table-loading"><td colspan="5" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div style="font-size:14px;font-weight:600;color:var(--accent)">Mfumo unajiandaa... inatafuta vifaa kwenye router</div><div style="font-size:11px;color:var(--td);margin-top:8px">Tafadhali subiri sekunde chache</div></td></tr>';
-      btnLoading(btn,false);
-      setTimeout(()=>refreshActiveAccess(),5000);
-      return;
+      } catch (e) {
+        clearInterval(msgTimer);
+        console.error(e);
+        tb.innerHTML = '<tr><td colspan="6" class="empty" style="color:var(--red)">Imeshindikana kupakia vifaa. Jaribu kuonyesha upya.</td></tr>';
+      }
+      finally { btnLoading(btn, false); clearInterval(msgTimer); }
     }
-    
-    const devs=res.devices||res;
-    
-    // Filter to officially allowed or unauthorized_allowed devices
-    const activeDevs=devs.filter(d=>d.status==='active'||d.status==='whitelisted'||d.status==='unauthorized_allowed');
-    
-    if(!activeDevs.length){tb.innerHTML='<tr><td colspan="5" class="empty">Hakuna kifaa chochote chenye mtandao sasa hivi.</td></tr>';return;}
-    tb.innerHTML=activeDevs.map(d=>`<tr>
-      <td>${d.host||'—'}</td><td style="font-size:11px">${d.mac}</td><td>${d.ip}</td>
+
+    // Active Access
+    async function refreshActiveAccess() {
+      const btn = document.getElementById('refreshActiveBtn');
+      btnLoading(btn, true);
+      const tb = document.getElementById('activeAccessTable');
+      tb.innerHTML = '<tr class="table-loading"><td colspan="5" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div style="font-size:14px;font-weight:600;color:var(--accent)">Inasoma vifaa vyenye mtandao...</div></td></tr>';
+
+      try {
+        const res = await fetchRetry(API + '/api/devices').then(r => r.json());
+
+        // Handle server still loading (initial scrape not done)
+        if (res.loading) {
+          tb.innerHTML = '<tr class="table-loading"><td colspan="5" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div style="font-size:14px;font-weight:600;color:var(--accent)">Mfumo unajiandaa... inatafuta vifaa kwenye router</div><div style="font-size:11px;color:var(--td);margin-top:8px">Tafadhali subiri sekunde chache</div></td></tr>';
+          btnLoading(btn, false);
+          setTimeout(() => refreshActiveAccess(), 5000);
+          return;
+        }
+
+        const devs = res.devices || res;
+
+        // Filter to officially allowed or unauthorized_allowed devices
+        const activeDevs = devs.filter(d => d.status === 'active' || d.status === 'whitelisted' || d.status === 'unauthorized_allowed');
+
+        if (!activeDevs.length) { tb.innerHTML = '<tr><td colspan="5" class="empty">Hakuna kifaa chochote chenye mtandao sasa hivi.</td></tr>'; return; }
+        tb.innerHTML = activeDevs.map(d => `<tr>
+      <td>${renderName(d.mac, d.nickname, d.host)}</td><td style="font-size:11px">${d.mac}</td><td>${d.ip}</td>
       <td>
-        ${d.status==='active'?'<span class="badge active" style="margin-right:6px">Vocha Hai</span><span style="font-size:11px">bado </span><span class="timer" style="font-size:11px">'+fmtTime(d.time_remaining)+'</span>':''}
-        ${d.status==='whitelisted'?'<span class="badge whitelisted">Whitelist</span>':''}
-        ${d.status==='unauthorized_allowed'?'<span class="badge unauthorized_allowed">IMEUNGANISHWA (LEAK)</span>':''}
+        ${d.status === 'active' ? '<span class="badge active" style="margin-right:6px">Vocha Hai</span><span style="font-size:11px">bado </span><span class="timer" style="font-size:11px">' + fmtTime(d.time_remaining) + '</span>' : ''}
+        ${d.status === 'whitelisted' ? '<span class="badge whitelisted">Whitelist</span>' : ''}
+        ${d.status === 'unauthorized_allowed' ? '<span class="badge unauthorized_allowed">IMEUNGANISHWA (LEAK)</span>' : ''}
       </td>
       <td>
         <button class="btn sm danger" onclick="blockDev('${d.mac}',this)">🚫 Tenganisha (Zuia)</button>
       </td>
     </tr>`).join('');
-  }catch(e){
-    console.error(e);
-    tb.innerHTML='<tr><td colspan="5" class="empty" style="color:var(--red)">Imeshindikana kupakia orodha ya mtandao.</td></tr>';
-  }
-  finally{btnLoading(btn,false);}
-}
-
-async function blockDev(mac,btn){
-  if(btn){btn.disabled=true;btn.classList.add('loading');btn.textContent='Inazuia...';}
-  showActivity('⏳ Inazuia kifaa '+mac+' kwenye router... tafadhali subiri');
-  try{
-    const r=await fetch(API+'/api/devices/'+encodeURIComponent(mac)+'/block',{method:'POST'});
-    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
-    toast('🚫 Kifaa kimezuiwa: '+mac,'warn');
-    // Optimistically update the row so user sees "blocked" + "Fundua" immediately
-    if(btn){
-      const row=btn.closest('tr');
-      if(row){
-        // Update status badge
-        const badge=row.querySelector('.badge');
-        if(badge){badge.className='badge blocked';badge.textContent='blocked';}
-        // Clear timer to prevent ticking when blocked
-        const timerCell=row.querySelector('.timer');
-        if(timerCell){timerCell.textContent='—';}
-        // Replace action buttons with Fundua + Whitelist
-        const actionCell=row.querySelector('td:last-child');
-        if(actionCell){
-          actionCell.innerHTML=`<div style="display:flex;gap:4px">
-            <button class="btn sm" onclick="unblockDev('${mac}',this)">✅ Fungua</button>
-            <button class="btn sm primary" style="background:var(--ag);color:var(--accent);border-color:transparent" onclick="quickWhitelist('${mac}','',this)">🛡️ Whitelist</button>
-          </div>`;
-        }
+      } catch (e) {
+        console.error(e);
+        tb.innerHTML = '<tr><td colspan="5" class="empty" style="color:var(--red)">Imeshindikana kupakia orodha ya mtandao.</td></tr>';
       }
+      finally { btnLoading(btn, false); }
     }
-  }catch(e){toast('Imeshindikana kuzuia: '+(e.message||'tatizo la mtandao'),'error');}
-  finally{hideActivity();}
-}
 
-async function unblockDev(mac,btn){
-  if(btn){btn.disabled=true;btn.classList.add('loading');btn.textContent='Inafungua...';}
-  showActivity('⏳ Inafungua kifaa '+mac+' kwenye router... tafadhali subiri');
-  try{
-    const r=await fetch(API+'/api/devices/'+encodeURIComponent(mac)+'/unblock',{method:'POST'});
-    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
-    toast('✅ Kifaa kimefunguliwa: '+mac,'info');
-  }catch(e){toast('Imeshindikana kufungua: '+(e.message||'tatizo la mtandao'),'error');}
-  finally{hideActivity();refreshCurrentPage();}
-}
+    async function blockDev(mac, btn) {
+      if (btn) { btn.disabled = true; btn.classList.add('loading'); btn.textContent = 'Inazuia...'; }
+      showActivity('⏳ Inazuia kifaa ' + mac + ' kwenye router... tafadhali subiri');
+      try {
+        const r = await fetch(API + '/api/devices/' + encodeURIComponent(mac) + '/block', { method: 'POST' });
+        if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.detail || 'HTTP ' + r.status); }
+        toast('🚫 Kifaa kimezuiwa: ' + mac, 'warn');
+        // Optimistically update the row so user sees "blocked" + "Fundua" immediately
+        if (btn) {
+          const row = btn.closest('tr');
+          if (row) {
+            // Update status badge
+            const badge = row.querySelector('.badge');
+            if (badge) { badge.className = 'badge blocked'; badge.textContent = 'blocked'; }
+            // Clear timer to prevent ticking when blocked
+            const timerCell = row.querySelector('.timer');
+            if (timerCell) { timerCell.textContent = '—'; }
+            // Replace action buttons with Fundua + Whitelist
+            const actionCell = row.querySelector('td:last-child');
+            if (actionCell) {
+              actionCell.innerHTML = `<div style="display:flex;gap:4px">
+            <button class="btn sm" onclick="unblockDev('${mac}',this)">✅ Fungua</button>
+          </div>`;
+            }
+          }
+        }
+      } catch (e) { toast('Imeshindikana kuzuia: ' + (e.message || 'tatizo la mtandao'), 'error'); }
+      finally { hideActivity(); }
+    }
 
-async function quickWhitelist(mac,host,btn){
-  if(btn){btn.disabled=true;btn.classList.add('loading');btn.textContent='...';}
-  showActivity('⏳ Inaongeza kifaa kwenye whitelist... tafadhali subiri');
-  try{
-    const hostname = host || 'Kifaa (' + mac.substring(12) + ')';
-    const r=await fetch(API+'/api/whitelist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mac:mac,hostname:hostname,label:'Kutoka Devices'})});
-    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
-    toast('✅ Kifaa kimeongezwa kwenye whitelist: '+mac,'info');
-  }catch(e){toast('Imeshindikana kuongeza: '+(e.message||'tatizo la mtandao'),'error');}
-  finally{hideActivity();refreshCurrentPage();}
-}
+    async function unblockDev(mac, btn) {
+      if (btn) { btn.disabled = true; btn.classList.add('loading'); btn.textContent = 'Inafungua...'; }
+      showActivity('⏳ Inafungua kifaa ' + mac + ' kwenye router... tafadhali subiri');
+      try {
+        const r = await fetch(API + '/api/devices/' + encodeURIComponent(mac) + '/unblock', { method: 'POST' });
+        if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.detail || 'HTTP ' + r.status); }
+        toast('✅ Kifaa kimefunguliwa: ' + mac, 'info');
+      } catch (e) { toast('Imeshindikana kufungua: ' + (e.message || 'tatizo la mtandao'), 'error'); }
+      finally { hideActivity(); refreshCurrentPage(); }
+    }
 
-// Vouchers
-async function loadVouchers(){
-  const tb=document.getElementById('vouchersTable');
-  tb.innerHTML='<tr class="table-loading"><td colspan="8" style="text-align:center;padding:24px;color:var(--td)"><span style="display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;margin-right:8px"></span>Inapakia vouchers...</td></tr>';
-  try{
-    const vouchers=await fetchRetry(API+'/api/vouchers').then(r=>r.json());
-    if(!vouchers.length){tb.innerHTML='<tr><td colspan="8" class="empty">Hakuna vouchers</td></tr>';return;}
-    tb.innerHTML=vouchers.slice().reverse().map(v=>`<tr>
-      <td>${v.id}</td><td>${v.phone||'—'}</td><td style="font-size:11px">${v.mac}</td><td>${v.hostname||'—'}</td>
+    async function quickWhitelist(mac, host, btn) {
+      if (btn) { btn.disabled = true; btn.classList.add('loading'); btn.textContent = '...'; }
+      showActivity('⏳ Inaongeza kifaa kwenye whitelist... tafadhali subiri');
+      try {
+        const hostname = host || 'Kifaa (' + mac.substring(12) + ')';
+        const r = await fetch(API + '/api/whitelist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mac: mac, hostname: hostname, label: 'Kutoka Devices' }) });
+        if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.detail || 'HTTP ' + r.status); }
+        toast('✅ Kifaa kimeongezwa kwenye whitelist: ' + mac, 'info');
+      } catch (e) { toast('Imeshindikana kuongeza: ' + (e.message || 'tatizo la mtandao'), 'error'); }
+      finally { hideActivity(); refreshCurrentPage(); }
+    }
+
+    // Vouchers
+    async function loadVouchers() {
+      const tb = document.getElementById('vouchersTable');
+      tb.innerHTML = '<tr class="table-loading"><td colspan="8" style="text-align:center;padding:24px;color:var(--td)"><span style="display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;margin-right:8px"></span>Inapakia vouchers...</td></tr>';
+      try {
+        const vouchers = await fetchRetry(API + '/api/vouchers').then(r => r.json());
+        if (!vouchers.length) { tb.innerHTML = '<tr><td colspan="8" class="empty">Hakuna vouchers</td></tr>'; return; }
+        tb.innerHTML = vouchers.slice().reverse().map(v => `<tr>
+      <td>${v.id}</td><td>${v.phone || '—'}</td><td style="font-size:11px">${v.mac}</td><td>${v.hostname || '—'}</td>
       <td>${fmtCurrency(v.amount)}</td><td><span class="badge ${v.status}">${v.status}</span></td>
       <td class="timer">${fmtTime(v.time_remaining)}</td><td>${fmtDate(v.created)}</td>
     </tr>`).join('');
-  }catch(e){console.error(e);tb.innerHTML='<tr><td colspan="8" class="empty" style="color:var(--red)">Imeshindikana kupakia vouchers</td></tr>';}
-}
+      } catch (e) { console.error(e); tb.innerHTML = '<tr><td colspan="8" class="empty" style="color:var(--red)">Imeshindikana kupakia vouchers</td></tr>'; }
+    }
 
-// Whitelist
-async function loadWhitelist(){
-  const tb=document.getElementById('whitelistTable');
-  tb.innerHTML='<tr class="table-loading"><td colspan="4" style="text-align:center;padding:24px;color:var(--td)"><span style="display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;margin-right:8px"></span>Inapakia whitelist...</td></tr>';
-  try{
-    const wl=await fetchRetry(API+'/api/whitelist').then(r=>r.json());
-    if(!wl.length){tb.innerHTML='<tr><td colspan="4" class="empty">Hakuna vifaa kwenye whitelist</td></tr>';return;}
-    tb.innerHTML=wl.map(w=>`<tr><td style="font-size:11px">${w.mac}</td><td>${w.hostname}</td><td>${w.label||'—'}</td>
+    // Whitelist
+    async function loadWhitelist() {
+      const tb = document.getElementById('whitelistTable');
+      tb.innerHTML = '<tr class="table-loading"><td colspan="3" style="text-align:center;padding:24px;color:var(--td)"><span style="display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;margin-right:8px"></span>Inapakia whitelist...</td></tr>';
+      try {
+        const wl = await fetchRetry(API + '/api/whitelist').then(r => r.json());
+        if (!wl.length) { tb.innerHTML = '<tr><td colspan="3" class="empty">Hakuna vifaa kwenye whitelist</td></tr>'; return; }
+        tb.innerHTML = wl.map(w => `<tr><td style="font-size:11px">${w.mac}</td><td>${renderName(w.mac, w.nickname, w.hostname)}</td>
       <td><button class="btn sm danger" onclick="removeWl('${w.mac}',this)">🗑️ Ondoa</button></td></tr>`).join('');
-  }catch(e){console.error(e);tb.innerHTML='<tr><td colspan="4" class="empty" style="color:var(--red)">Imeshindikana kupakia whitelist</td></tr>';}
-}
+      } catch (e) { console.error(e); tb.innerHTML = '<tr><td colspan="3" class="empty" style="color:var(--red)">Imeshindikana kupakia whitelist</td></tr>'; }
+    }
 
-async function addWhitelist(){
-  const mac=document.getElementById('wlMac').value.trim();
-  const hostname=document.getElementById('wlHost').value.trim();
-  const label=document.getElementById('wlLabel').value.trim();
-  if(!mac||!hostname){toast('MAC na Hostname zinahitajika','error');return;}
-  const btn=document.getElementById('addWlBtn');
-  btn.disabled=true;
-  btnLoading(btn,true);
-  showActivity('⏳ Inaongeza '+mac+' kwenye whitelist... tafadhali subiri');
-  try{
-    const r=await fetch(API+'/api/whitelist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mac,hostname,label})});
-    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
-    document.getElementById('wlMac').value='';document.getElementById('wlHost').value='';document.getElementById('wlLabel').value='';
-    toast('✅ Kifaa kimeongezwa kwenye whitelist: '+mac,'info');
-  }catch(e){toast('Imeshindikana kuongeza: '+(e.message||'tatizo la mtandao'),'error');}
-  finally{btn.disabled=false;btnLoading(btn,false);hideActivity();refreshCurrentPage();}
-}
+    async function addWhitelist() {
+      const mac = document.getElementById('wlMac').value.trim();
+      const hostname = document.getElementById('wlHost').value.trim();
+      const label = '';
+      if (!mac || !hostname) { toast('MAC na Hostname zinahitajika', 'error'); return; }
+      const btn = document.getElementById('addWlBtn');
+      btn.disabled = true;
+      btnLoading(btn, true);
+      showActivity('⏳ Inaongeza ' + mac + ' kwenye whitelist... tafadhali subiri');
+      try {
+        const r = await fetch(API + '/api/whitelist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mac, hostname, label }) });
+        if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.detail || 'HTTP ' + r.status); }
+        document.getElementById('wlMac').value = ''; document.getElementById('wlHost').value = '';
+        toast('✅ Kifaa kimeongezwa kwenye whitelist: ' + mac, 'info');
+      } catch (e) { toast('Imeshindikana kuongeza: ' + (e.message || 'tatizo la mtandao'), 'error'); }
+      finally { btn.disabled = false; btnLoading(btn, false); hideActivity(); refreshCurrentPage(); }
+    }
 
-async function removeWl(mac,btn){
-  if(btn){btn.disabled=true;btn.classList.add('loading');btn.textContent='Inaondoa...';}
-  showActivity('⏳ Inaondoa '+mac+' kutoka whitelist... tafadhali subiri');
-  try{
-    const r=await fetch(API+'/api/whitelist/'+encodeURIComponent(mac),{method:'DELETE'});
-    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
-    toast('🗑️ Imeondolewa kutoka whitelist: '+mac,'warn');
-  }catch(e){toast('Imeshindikana kuondoa: '+(e.message||'tatizo la mtandao'),'error');}
-  finally{hideActivity();refreshCurrentPage();}
-}
+    async function removeWl(mac, btn) {
+      if (btn) { btn.disabled = true; btn.classList.add('loading'); btn.textContent = 'Inaondoa...'; }
+      showActivity('⏳ Inaondoa ' + mac + ' kutoka whitelist... tafadhali subiri');
+      try {
+        const r = await fetch(API + '/api/whitelist/' + encodeURIComponent(mac), { method: 'DELETE' });
+        if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.detail || 'HTTP ' + r.status); }
+        toast('🗑️ Imeondolewa kutoka whitelist: ' + mac, 'warn');
+      } catch (e) { toast('Imeshindikana kuondoa: ' + (e.message || 'tatizo la mtandao'), 'error'); }
+      finally { hideActivity(); refreshCurrentPage(); }
+    }
 
-// Settings
-async function loadSettings(){
-  try{
-    const c=await fetchRetry(API+'/api/config/raw').then(r=>r.json());
-    document.getElementById('cfgRouterIp').value=c.routerIp||'';
-    document.getElementById('cfgRouterUser').value=c.routerUser||'';
-    document.getElementById('cfgRouterPass').value=c.routerPass||'';
-    document.getElementById('cfgPlaywright').value=String(c.playwrightEnabled!==false);
-    document.getElementById('cfgServerIp').value=c.serverIp||'';
-    document.getElementById('cfgAdminPin').value=c.adminPin||'2004';
-    document.getElementById('cfgWifiSSID').value=c.wifiSSID||'';
-    document.getElementById('cfgWifiPassword').value=c.wifiPassword||'';
-    document.getElementById('cfgWifiSecurity').value=c.wifiSecurity||'WPA';
-  }catch(e){console.error(e)}
-}
+    // Settings
+    async function loadSettings() {
+      try {
+        const c = await fetchRetry(API + '/api/config/raw').then(r => r.json());
+        document.getElementById('cfgRouterIp').value = c.routerIp || '';
+        document.getElementById('cfgRouterUser').value = c.routerUser || '';
+        document.getElementById('cfgRouterPass').value = c.routerPass || '';
+        document.getElementById('cfgPlaywright').value = String(c.playwrightEnabled !== false);
+        document.getElementById('cfgServerIp').value = c.serverIp || '';
+        document.getElementById('cfgAdminPin').value = c.adminPin || '2004';
+        document.getElementById('cfgWifiSSID').value = c.wifiSSID || '';
+        document.getElementById('cfgWifiPassword').value = c.wifiPassword || '';
+        document.getElementById('cfgWifiSecurity').value = c.wifiSecurity || 'WPA';
+        document.getElementById('cfgDailyCutoff').value = c.dailyCutoff || '';
+        document.getElementById('cfgUnblockPrice').value = c.unblockPrice || 1000;
+      } catch (e) { console.error(e) }
+    }
 
-async function saveSettings(){
-  const btn=document.getElementById('saveSettingsBtn');
-  btn.disabled=true;
-  btnLoading(btn,true);
-  showActivity('⏳ Inahifadhi mipangilio... tafadhali subiri');
-  const body={
-    routerIp:document.getElementById('cfgRouterIp').value,
-    routerUser:document.getElementById('cfgRouterUser').value,
-    routerPass:document.getElementById('cfgRouterPass').value,
-    playwrightEnabled:document.getElementById('cfgPlaywright').value==='true',
-    serverIp:document.getElementById('cfgServerIp').value,
-    adminPin:document.getElementById('cfgAdminPin').value,
-    wifiSSID:document.getElementById('cfgWifiSSID').value,
-    wifiPassword:document.getElementById('cfgWifiPassword').value,
-    wifiSecurity:document.getElementById('cfgWifiSecurity').value
-  };
-  try{
-    const r=await fetch(API+'/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
-    toast('✅ Mipangilio imehifadhiwa!','info');
-  }catch(e){toast('Imeshindikana kuhifadhi: '+(e.message||'tatizo la mtandao'),'error');}
-  finally{btn.disabled=false;btnLoading(btn,false);hideActivity();}
-}
+    async function saveSettings() {
+      const btn = document.getElementById('saveSettingsBtn');
+      btn.disabled = true;
+      btnLoading(btn, true);
+      showActivity('⏳ Inahifadhi mipangilio... tafadhali subiri');
+      const body = {
+        routerIp: document.getElementById('cfgRouterIp').value,
+        routerUser: document.getElementById('cfgRouterUser').value,
+        routerPass: document.getElementById('cfgRouterPass').value,
+        playwrightEnabled: document.getElementById('cfgPlaywright').value === 'true',
+        serverIp: document.getElementById('cfgServerIp').value,
+        adminPin: document.getElementById('cfgAdminPin').value,
+        wifiSSID: document.getElementById('cfgWifiSSID').value,
+        wifiPassword: document.getElementById('cfgWifiPassword').value,
+        wifiSecurity: document.getElementById('cfgWifiSecurity').value,
+        dailyCutoff: document.getElementById('cfgDailyCutoff').value || '',
+        unblockPrice: parseInt(document.getElementById('cfgUnblockPrice').value) || 1000
+      };
+      try {
+        const r = await fetch(API + '/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.detail || 'HTTP ' + r.status); }
+        toast('✅ Mipangilio imehifadhiwa!', 'info');
+      } catch (e) { toast('Imeshindikana kuhifadhi: ' + (e.message || 'tatizo la mtandao'), 'error'); }
+      finally { btn.disabled = false; btnLoading(btn, false); hideActivity(); }
+    }
 
-// Reset Revenue
-async function resetRevenue(){
-  if(!confirm("Una uhakika unataka kufuta rekodi ZOTE za mapato?\n\nVouchers zilizokwisha muda wake zitaondolewa kwenye mfumo na mapato yatasoma 0 TZS. Vouchers zinazotumika sasa hivi HAZITAATHIRIKA.\n\nKitendo hiki hakiwezi kutenguliwa!")) return;
-  const btn=document.getElementById('resetRevenueBtn');
-  if(btn){btn.disabled=true;btnLoading(btn,true);}
-  showActivity('⏳ Inafuta rekodi za mapato... tafadhali subiri');
-  try{
-    const r=await fetch(API+'/api/vouchers/reset-revenue',{method:'DELETE'});
-    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
-    toast('✅ Rekodi za mapato zimefutwa kikamilifu!','success');
-  }catch(e){toast('Imeshindikana kufuta: '+(e.message||'tatizo la mtandao'),'error');}
-  finally{if(btn){btn.disabled=false;btnLoading(btn,false);}hideActivity();refreshCurrentPage();}
-}
+    // Reset Revenue
+    async function resetRevenue() {
+      if (!confirm("Una uhakika unataka kufuta rekodi ZOTE za mapato?\n\nVouchers zilizokwisha muda wake zitaondolewa kwenye mfumo na mapato yatasoma 0 TZS. Vouchers zinazotumika sasa hivi HAZITAATHIRIKA.\n\nKitendo hiki hakiwezi kutenguliwa!")) return;
+      const btn = document.getElementById('resetRevenueBtn');
+      if (btn) { btn.disabled = true; btnLoading(btn, true); }
+      showActivity('⏳ Inafuta rekodi za mapato... tafadhali subiri');
+      try {
+        const r = await fetch(API + '/api/vouchers/reset-revenue', { method: 'DELETE' });
+        if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.detail || 'HTTP ' + r.status); }
+        toast('✅ Rekodi za mapato zimefutwa kikamilifu!', 'success');
+      } catch (e) { toast('Imeshindikana kufuta: ' + (e.message || 'tatizo la mtandao'), 'error'); }
+      finally { if (btn) { btn.disabled = false; btnLoading(btn, false); } hideActivity(); refreshCurrentPage(); }
+    }
 
-// WebSocket
-function connectWS(){
-  const proto=location.protocol==='https:'?'wss:':'ws:';
-  ws=new WebSocket(proto+'//'+location.host+'/ws');
-  ws.onmessage=e=>{
-    try{
-      const m=JSON.parse(e.data);
-      if(m.type==='devices_update'){refreshDevices();loadDashboard();}
-      if(m.type==='payment_completed')toast('💰 Malipo yamepokelewa! Ref: '+m.reference,'info');
-      if(m.type==='whitelist_updated')loadWhitelist();
-    }catch(x){}
-  };
-  ws.onclose=()=>setTimeout(connectWS,3000);
-  ws.onerror=()=>ws.close();
-  setInterval(()=>{if(ws&&ws.readyState===1)ws.send(JSON.stringify({type:'ping'}))},30000);
-}
+    // WebSocket
+    function connectWS() {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(proto + '//' + location.host + '/ws');
+      ws.onmessage = e => {
+        try {
+          const m = JSON.parse(e.data);
+          if (m.type === 'devices_update') { refreshDevices(); loadDashboard(); }
+          if (m.type === 'payment_completed') toast('💰 Malipo yamepokelewa! Ref: ' + m.reference, 'info');
+          if (m.type === 'whitelist_updated') loadWhitelist();
+          if (m.type === 'cutoff_triggered') toast('🕐 Muda wa cutoff (' + m.time + ') umefika — vouchers ' + m.expired_count + ' zimemalizika!', 'warn');
+        } catch (x) { }
+      };
+      ws.onclose = () => setTimeout(connectWS, 3000);
+      ws.onerror = () => ws.close();
+      setInterval(() => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' })) }, 30000);
+    }
 
-// Live countdown updater
-setInterval(()=>{
-  document.querySelectorAll('.timer').forEach(el=>{
-    const t=el.textContent;if(!t||t==='—')return;
-    const p=t.split(':').map(Number);if(p.length!==3)return;
-    let s=p[0]*3600+p[1]*60+p[2]-1;
-    if(s<=0){el.textContent='EXPIRED';el.style.color='var(--red)';return;}
-    const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;
-    el.textContent=`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
-  });
-},1000);
+    // Live countdown updater
+    setInterval(() => {
+      document.querySelectorAll('.timer').forEach(el => {
+        const t = el.textContent; if (!t || t === '—') return;
+        const p = t.split(':').map(Number); if (p.length !== 3) return;
+        let s = p[0] * 3600 + p[1] * 60 + p[2] - 1;
+        if (s <= 0) { el.textContent = 'EXPIRED'; el.style.color = 'var(--red)'; return; }
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        el.textContent = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+      });
+    }, 1000);
 
-// connectWS and loadDashboard are called by unlockAdmin() after PIN auth
+    // connectWS and loadDashboard are called by unlockAdmin() after PIN auth
 
-// Voucher Codes
-async function loadVoucherCodes(){
-  const grid=document.getElementById('voucherCodesGrid');
-  grid.innerHTML='<div style="text-align:center;padding:40px;color:var(--td);width:100%;grid-column:1/-1"><span style="display:inline-block;width:24px;height:24px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;margin-bottom:12px"></span><br>Inapakia voucher codes...</div>';
-  try{
-    const [codes, cfg] = await Promise.all([
-      fetch(API+'/api/voucher-codes').then(r=>r.json()),
-      fetch(API+'/api/config/raw').then(r=>r.json()).catch(()=>({}))
-    ]);
-    if(!codes.length){grid.innerHTML='<p class="empty" style="grid-column:1/-1">Bado hakuna voucher codes. Tumia fomu hapo juu kutengeneza!</p>';return;}
-    
-    const ssid = cfg.wifiSSID || 'HotZone WiFi';
-    const pwd = cfg.wifiPassword || '';
-    const serverIp = cfg.serverIp || '192.168.1.162';
+    // Voucher Codes
+    async function loadVoucherCodes() {
+      const grid = document.getElementById('voucherCodesGrid');
+      grid.innerHTML = '<div style="text-align:center;padding:40px;color:var(--td);width:100%;grid-column:1/-1"><span style="display:inline-block;width:24px;height:24px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;margin-bottom:12px"></span><br>Inapakia voucher codes...</div>';
+      try {
+        const [codes, cfg] = await Promise.all([
+          fetch(API + '/api/voucher-codes').then(r => r.json()),
+          fetch(API + '/api/config/raw').then(r => r.json()).catch(() => ({}))
+        ]);
+        if (!codes.length) { grid.innerHTML = '<p class="empty" style="grid-column:1/-1">Bado hakuna voucher codes. Tumia fomu hapo juu kutengeneza!</p>'; return; }
 
-    grid.innerHTML=codes.slice().reverse().map(c=>`
+        const ssid = cfg.wifiSSID || 'HotZone WiFi';
+        const pwd = cfg.wifiPassword || '';
+        const serverIp = cfg.serverIp || '192.168.1.162';
+
+        grid.innerHTML = codes.slice().reverse().map(c => `
       <div class="code-card" id="code-card-${c.code}" style="text-align:left; padding:0; overflow:hidden">
         
         <!-- Header -->
@@ -888,7 +2479,7 @@ async function loadVoucherCodes(){
 
         <!-- Footer -->
         <div style="padding:4px 10px 8px; text-align:center">
-          <div class="code-meta">${c.used_by ? 'Imetumika na: '+c.used_by : 'Bado haijatumika'}</div>
+          <div class="code-meta">${c.used_by ? 'Imetumika na: ' + c.used_by : 'Bado haijatumika'}</div>
           <div class="code-actions" style="margin-top:4px">
             <button class="btn sm" onclick="printSingleVoucher('${c.code}')">🖨️ Chapisha</button>
             <button class="btn sm danger" onclick="deleteVoucherCode('${c.code}', this)">🗑️ Futa</button>
@@ -896,67 +2487,68 @@ async function loadVoucherCodes(){
         </div>
       </div>
     `).join('');
-  }catch(e){console.error(e)}
-}
+      } catch (e) { console.error(e) }
+    }
 
-async function createVoucherCodes(){
-  const label=document.getElementById('vcLabel').value.trim();
-  const amount=parseInt(document.getElementById('vcAmount').value)||1000;
-  const duration_hours=parseInt(document.getElementById('vcDuration').value)||24;
-  const quantity=parseInt(document.getElementById('vcQty').value)||1;
-  const btn=document.getElementById('genCodesBtn');
-  btn.disabled=true;
-  btnLoading(btn,true);
-  showActivity('⏳ Inatengeneza voucher codes mpya... tafadhali subiri');
-  try{
-    const r=await fetch(API+'/api/voucher-codes',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({label,amount,duration_hours,quantity})
-    });
-    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
-    const res=await r.json();
-    toast(`🎫 Voucher codes ${res.count} zimetengenezwa!`,'info');
-    loadVoucherCodes();
-  }catch(e){toast('Imeshindikana kutengeneza codes: '+(e.message||'tatizo'),'error');}
-  finally{btn.disabled=false;btnLoading(btn,false);hideActivity();}
-}
+    async function createVoucherCodes() {
+      const label = document.getElementById('vcLabel').value.trim();
+      const amount = parseInt(document.getElementById('vcAmount').value) || 1000;
+      const duration_hours = parseInt(document.getElementById('vcDuration').value) || 24;
+      const quantity = parseInt(document.getElementById('vcQty').value) || 1;
+      const btn = document.getElementById('genCodesBtn');
+      btn.disabled = true;
+      btnLoading(btn, true);
+      showActivity('⏳ Inatengeneza voucher codes mpya... tafadhali subiri');
+      try {
+        const r = await fetch(API + '/api/voucher-codes', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ label, amount, duration_hours, quantity })
+        });
+        if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.detail || 'HTTP ' + r.status); }
+        const res = await r.json();
+        toast(`🎫 Voucher codes ${res.count} zimetengenezwa!`, 'info');
+        loadVoucherCodes();
+      } catch (e) { toast('Imeshindikana kutengeneza codes: ' + (e.message || 'tatizo'), 'error'); }
+      finally { btn.disabled = false; btnLoading(btn, false); hideActivity(); }
+    }
 
-async function deleteVoucherCode(code, btn){
-  if(btn){btn.disabled=true;btn.classList.add('loading');btn.textContent='Inafuta...';}
-  showActivity('⏳ Inafuta voucher code '+code+'... tafadhali subiri');
-  try{
-    const r=await fetch(API+'/api/voucher-codes/'+code,{method:'DELETE'});
-    if(!r.ok){const err=await r.json().catch(()=>({}));throw new Error(err.detail||'HTTP '+r.status);}
-    toast('🗑️ Voucher code imefutwa: '+code,'warn');
-  }catch(e){toast('Imeshindikana kufuta: '+(e.message||'tatizo'),'error');}
-  finally{hideActivity();loadVoucherCodes();}
-}
+    async function deleteVoucherCode(code, btn) {
+      if (btn) { btn.disabled = true; btn.classList.add('loading'); btn.textContent = 'Inafuta...'; }
+      showActivity('⏳ Inafuta voucher code ' + code + '... tafadhali subiri');
+      try {
+        const r = await fetch(API + '/api/voucher-codes/' + code, { method: 'DELETE' });
+        if (!r.ok) { const err = await r.json().catch(() => ({})); throw new Error(err.detail || 'HTTP ' + r.status); }
+        toast('🗑️ Voucher code imefutwa: ' + code, 'warn');
+      } catch (e) { toast('Imeshindikana kufuta: ' + (e.message || 'tatizo'), 'error'); }
+      finally { hideActivity(); loadVoucherCodes(); }
+    }
 
-function downloadQR(imgId, url, filename){
-  if(imgId){
-    const img=document.getElementById(imgId);
-    if (!img.src) return;
-    const a=document.createElement('a');a.href=img.src;a.download=filename;a.click();
-  } else {
-    const a=document.createElement('a');a.href=url;a.download=filename;a.click();
-  }
-}
+    function downloadQR(imgId, url, filename) {
+      if (imgId) {
+        const img = document.getElementById(imgId);
+        if (!img.src) return;
+        const a = document.createElement('a'); a.href = img.src; a.download = filename; a.click();
+      } else {
+        const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+      }
+    }
 
-function printUnusedVouchers() {
-  document.body.classList.add('print-unused');
-  window.print();
-  document.body.classList.remove('print-unused');
-}
+    function printUnusedVouchers() {
+      document.body.classList.add('print-unused');
+      window.print();
+      document.body.classList.remove('print-unused');
+    }
 
-function printSingleVoucher(code) {
-  const card = document.getElementById('code-card-' + code);
-  if (!card) return;
-  card.classList.add('print-target');
-  document.body.classList.add('print-single');
-  window.print();
-  document.body.classList.remove('print-single');
-  card.classList.remove('print-target');
-}
-</script>
+    function printSingleVoucher(code) {
+      const card = document.getElementById('code-card-' + code);
+      if (!card) return;
+      card.classList.add('print-target');
+      document.body.classList.add('print-single');
+      window.print();
+      document.body.classList.remove('print-single');
+      card.classList.remove('print-target');
+    }
+  </script>
 </body>
+
 </html>
