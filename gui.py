@@ -160,12 +160,19 @@ class ServerGUI(ctk.CTk):
     def run_uvicorn(self):
         try:
             from server import app
-            config = uvicorn.Config(app=app, host="0.0.0.0", port=8000, log_level="info")
-            self.server_instance = uvicorn.Server(config=config)
-            self.server_instance.run()
+            # Attempt Port 80 first
+            try:
+                config = uvicorn.Config(app=app, host="0.0.0.0", port=80, log_level="info")
+                self.server_instance = uvicorn.Server(config=config)
+                self.server_instance.run()
+            except Exception:
+                # Fallback to Port 8000
+                config = uvicorn.Config(app=app, host="0.0.0.0", port=8000, log_level="info")
+                self.server_instance = uvicorn.Server(config=config)
+                self.server_instance.run()
         except Exception as e:
             def show_error():
-                messagebox.showerror("Server Crash", f"The server failed to start:\n\n{str(e)}\n\n(It may be blocked by a Firewall, Port 8000 is used, or data is inaccessible)")
+                messagebox.showerror("Server Crash", f"The server failed to start:\n\n{str(e)}\n\n(It may be blocked by a Firewall, Port 80 or 8000 is used, or data is inaccessible)")
                 self.stop_server()
             self.after(0, show_error)
 

@@ -255,6 +255,18 @@
       color: var(--red)
     }
 
+    .badge.dns_active {
+      background: var(--ag);
+      color: var(--accent);
+      border: 1px solid var(--accent);
+    }
+
+    .badge.tracking {
+      background: rgba(255, 165, 2, .1);
+      color: var(--orange);
+      border: 1px solid var(--og);
+    }
+
     .badge.tier-high {
       background: var(--gg);
       color: var(--green);
@@ -429,6 +441,37 @@
       .tier-summary {
         grid-template-columns: 1fr
       }
+    }
+
+    .dns-guard-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      background: rgba(0, 210, 160, 0.1);
+      border: 1px solid rgba(0, 210, 160, 0.2);
+      border-radius: 100px;
+      color: var(--green);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      margin-left: 12px;
+    }
+
+    .dns-guard-pill .pulse {
+      width: 6px;
+      height: 6px;
+      background: var(--green);
+      border-radius: 50%;
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.1); opacity: 1; }
+      100% { transform: scale(0.95); opacity: 0.8; }
     }
 
     .btn {
@@ -1205,7 +1248,6 @@
           class="icon">📊</span>Dashibodi</div>
       <div class="nav-item" data-page="activeaccess" onclick="showPage('activeaccess')"><span
           class="icon">🟢</span>Mtandaoni</div>
-      <div class="nav-item" data-page="devices" onclick="showPage('devices')"><span class="icon">📡</span>Vifaa</div>
       <div class="nav-item" data-page="customers" onclick="showPage('customers')"><span class="icon">👥</span>Wateja
       </div>
       <div class="nav-item" data-page="vouchers" onclick="showPage('vouchers')"><span class="icon">🎫</span>Vouchers
@@ -1265,7 +1307,13 @@
 
       <!-- Dashboard -->
       <div class="page active" id="page-dashboard">
-        <h2>Dashibodi</h2>
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+          <h2>Dashibodi</h2>
+          <div class="dns-guard-pill">
+            <span class="pulse"></span>
+            DNS Guard: Zero-Polling Mode
+          </div>
+        </div>
         <div id="cutoffBanner" style="display:none;margin-bottom:16px"></div>
         <div class="cards">
           <div class="card accent">
@@ -1287,10 +1335,6 @@
           <div class="card">
             <div class="label">Vouchers Zinazotumika</div>
             <div class="value" id="activeCount">0</div>
-          </div>
-          <div class="card">
-            <div class="label">Vifaa Vyote</div>
-            <div class="value" id="deviceCount">0</div>
           </div>
         </div>
 
@@ -1427,31 +1471,7 @@
         </div>
       </div>
 
-      <!-- Vifaa -->
-      <div class="page" id="page-devices">
-        <h2>Vifaa Vilivyo Hai</h2>
-        <div style="margin-bottom:12px"><button class="btn" id="refreshBtn" onclick="refreshDevices()">🔄 Onyesha
-            Upya</button></div>
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>Hostname</th>
-                <th>MAC Address</th>
-                <th>IP</th>
-                <th>Status</th>
-                <th>Muda Uliobaki</th>
-                <th>Vitendo</th>
-              </tr>
-            </thead>
-            <tbody id="devicesTable">
-              <tr>
-                <td colspan="6" class="empty">Inapakia...</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
+
 
       <!-- Vouchers -->
       <div class="page" id="page-vouchers">
@@ -1514,9 +1534,9 @@
         <div class="cards" style="margin-bottom:24px">
           <div class="card qr-card">
             <div class="label">📶 Scan Kuunganisha WiFi</div>
-            <p>Wateja wanaweza scan QR hii ili <strong>kuunganisha na WiFi</strong> bila kuandika password.</p>
+            <p>Wateja wanaweza scan QR hii ili <strong>kuunganisha na WiFi</strong> bila kuandika password.<br><span style="font-size:11px;color:var(--green)">Ukishaunganisha, captive portal itafunguka moja kwa moja!</span></p>
             <img id="connectQR" src="/api/qr/connect" alt="WiFi Connect QR">
-            <div style="margin-top:8px;font-size:11px;color:var(--td)">Inaunganisha na WiFi (bila internet)</div>
+            <div style="margin-top:8px;font-size:11px;color:var(--td)">Inaunganisha na WiFi → Portal inafunguka auto</div>
             <br>
             <button class="btn" onclick="downloadQR('connectQR','HotZone-WiFi-Connect.png')">⬇️ Pakua QR</button>
           </div>
@@ -1524,8 +1544,7 @@
 
         <!-- Tengeneza Voucher Codes -->
         <h2 style="font-size:16px;margin-bottom:12px">Tengeneza Voucher Codes</h2>
-        <p style="color:var(--td);font-size:13px;margin-bottom:12px">Tengeneza voucher codes mapya. Kila voucher ina QR
-          mbili na maelekezo kamili kwa wateja.</p>
+        <p style="color:var(--td);font-size:13px;margin-bottom:12px">Tengeneza voucher codes mapya. Mteja anapounganisha WiFi, captive portal inafunguka moja kwa moja na anaweka code kupata internet.</p>
         <div class="create-form">
           <div class="form-group"><label>Jina</label><input id="vcLabel" placeholder="mfano: WiFi 24h" value="WiFi 24h">
           </div>
@@ -1556,10 +1575,6 @@
               <div class="form-group"><label>Username</label><input id="cfgRouterUser"></div>
               <div class="form-group"><label>Password</label><input id="cfgRouterPass" type="password"></div>
             </div>
-            <div class="form-group"><label>Playwright Automation</label><select id="cfgPlaywright">
-                <option value="true">Imewashwa</option>
-                <option value="false">Imezimwa</option>
-              </select></div>
           </div>
           <div class="card" style="margin-bottom:16px">
             <div class="label" style="margin-bottom:12px">Server Settings</div>
@@ -1625,6 +1640,7 @@
               <ul style="margin:0; padding-left:20px; font-size:14px; line-height:1.8; color:var(--t)">
                 <li><strong style="color:var(--green)">Mapato:</strong> Fuatilia kwa usahihi kiasi ulichoingiza leo,
                   wiki hii, na mwezi huu.</li>
+                <li><strong style="color:var(--accent)">DNS Guard:</strong> Mfumo sasa hautumii API ya router kila sekunde (Zero-Polling). Hii inafanya router yako isichoke na admin panel kuwa na kasi sana.</li>
                 <li><strong style="color:var(--blue)">Vifaa Vyote:</strong> Jua idadi kamili ya watu walioconnect kwenye
                   wifi</li>
                 <li><strong style="color:var(--orange)">Grafu ya Mapato:</strong> Tazama mwenendo wa mauzo yako kwa siku
@@ -1633,6 +1649,22 @@
                   zaidi mtandaoni.</li>
               </ul>
             </div>
+          </div>
+
+          <!-- NEW SECTION: DNS GUARD -->
+          <div class="card" style="margin-bottom:24px; border-left:4px solid var(--green); padding:20px;">
+            <div class="label"
+              style="color:var(--green); font-size:18px; margin-bottom:12px; display:flex; align-items:center; gap:8px;">
+              🛡️ Teknolojia ya DNS Guard
+            </div>
+            <p style="font-size:14px; line-height:1.7; color:var(--t)">
+              HotZone sasa inatumia <strong>DNS Guard</strong> kulinda router yako dhidi ya kukwama (Overload):
+            </p>
+            <ul style="margin:12px 0 0 20px; font-size:14px; line-height:1.8; color:var(--t)">
+              <li><strong>Zero-Polling:</strong> Tofauti na mifumo mingine, HotZone haiulizi router "nani yupo mtandaoni" kila sekunde. Inasubiri kuona maombi ya internet (DNS) kutoka kwa mteja.</li>
+              <li><strong>Discovery Mode:</strong> Mteja mpya akijaribu kuingia, mfumo unamjua papo hapo kupitia DNS na kumtupa kwenye captive portal <strong>bila kuchelewa</strong>.</li>
+              <li><strong>Kumbukumbu (Cache):</strong> Mfumo unahifadhi taarifa za kila mteja kwenye DB yake, hivyo router inaitwa tu pale unapotaka <strong>Kuzuia (Block)</strong> au <strong>Kufungua (Unblock)</strong> mtu.</li>
+            </ul>
           </div>
 
           <!-- SEHEMU YA 2: KUDHIBITI VIFAA -->
@@ -1704,10 +1736,9 @@
             </p>
             <ul style="margin:12px 0 0 20px; font-size:14px; line-height:1.8; color:var(--t)">
               <li><strong>Tengeneza Haraka:</strong> Chagua kiasi cha pesa (mfano: 500) na masaa ya kutumika (mfano:
-                12), kisha bonyeza "Ongeza Vocha".</li>
-              <li><strong>Uza kwa QR Code:</strong> Mteja ana-scan QR Code ili kuunganisha WiFi, kisha akiingia kwenye
-                browser, anaweka namba ya vocha kupata internet.</li>
-              <li><strong>Chapisha (Print):</strong> Kitufe cha "Print(Chapisha)" kinakuruhusu kutoa karatasi za vocha
+                12), kisha bonyeza "Tengeneza Codes".</li>
+              <li><strong>Captive Portal:</strong> Mteja anapounganisha WiFi, <strong style="color:var(--green)">ukurasa wa HotZone unafunguka moja kwa moja</strong> — hakuna haja ya ku-type IP au ku-scan QR ya pili. Anaweka tu code yake na kupata internet!</li>
+              <li><strong>Chapisha (Print):</strong> Kitufe cha "Chapisha" kinakuruhusu kutoa karatasi za vocha
                 ambazo hazijatumika ili uweze kusambaza na kuuza.</li>
             </ul>
           </div>
@@ -1866,7 +1897,6 @@
       const p = sessionStorage.getItem('hz_active_page') || 'dashboard';
       if (p === 'dashboard') loadDashboard();
       if (p === 'activeaccess') refreshActiveAccess();
-      if (p === 'devices') refreshDevices();
       if (p === 'customers') loadCustomers();
       if (p === 'vouchers') loadVouchers();
       if (p === 'qrcodes') loadVoucherCodes();
@@ -2102,64 +2132,7 @@
       } catch (e) { console.error(e); tb.innerHTML = '<tr><td colspan="6" class="empty" style="color:var(--red)">Imeshindikana kupakia wateja</td></tr>'; }
     }
 
-    // Devices
-    async function refreshDevices() {
-      const btn = document.getElementById('refreshBtn');
-      btnLoading(btn, true);
-      const tb = document.getElementById('devicesTable');
-
-      const loadingMessages = [
-        "Inavuta taarifa za vifaa haraka..."
-      ];
-      let msgIndex = 0;
-
-      tb.innerHTML = `<tr class="table-loading"><td colspan="6" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div id="loadingStatusText" style="font-size:14px;font-weight:600;color:var(--accent)">Inavuta taarifa...</div></td></tr>`;
-
-      const statusEl = document.getElementById('loadingStatusText');
-      const msgTimer = setInterval(() => {
-        if (statusEl) {
-          msgIndex = (msgIndex + 1) % loadingMessages.length;
-          statusEl.textContent = loadingMessages[msgIndex];
-        }
-      }, 1000);
-
-      try {
-        const res = await fetchRetry(API + '/api/devices').then(r => r.json());
-        clearInterval(msgTimer);
-
-        // Handle server still loading (initial scrape not done)
-        if (res.loading) {
-          tb.innerHTML = '<tr class="table-loading"><td colspan="6" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div style="font-size:14px;font-weight:600;color:var(--accent)">Mfumo unajiandaa... inatafuta vifaa kwenye router</div><div style="font-size:11px;color:var(--td);margin-top:8px">Tafadhali subiri sekunde chache, utaona vifaa hivi karibuni</div></td></tr>';
-          btnLoading(btn, false);
-          setTimeout(() => refreshDevices(), 5000);
-          return;
-        }
-
-        const devs = res.devices || res;
-        document.getElementById('deviceCount').textContent = devs.length;
-        if (!devs.length) { tb.innerHTML = '<tr><td colspan="6" class="empty">Hakuna vifaa vilivyopatikana ndani ya router.</td></tr>'; return; }
-        tb.innerHTML = devs.map(d => `<tr>
-      <td>${renderName(d.mac, d.nickname, d.host)}</td><td style="font-size:11px">${d.mac}</td><td>${d.ip}</td>
-      <td><span class="badge ${d.status}">${d.status === 'unauthorized_allowed' ? 'IMEUNGANISHWA (LEAK)' : d.status === 'pending' ? 'Inasubiri...' : d.status === 'blocking' ? 'Inazuia...' : d.status}</span></td>
-      <td class="timer">${d.status === 'active' ? fmtTime(d.time_remaining) : '—'}</td>
-      <td>${d.status === 'whitelisted' ? '<span style="font-size:11px;color:var(--td)">Kimelindwa</span>' : d.status === 'unauthorized_allowed' ?
-            `<div style="display:flex;gap:4px">
-          <button class="btn sm danger" onclick="blockDev('${d.mac}',this)">🚫 Zuia</button>
-        </div>`:
-            `<div style="display:flex;gap:4px">
-          ${d.status === 'active' ?
-              `<button class="btn sm danger" onclick="blockDev('${d.mac}',this)">🚫 Zuia</button>` :
-              `<button class="btn sm" onclick="unblockDev('${d.mac}',this)">✅ Fungua</button>`}
-        </div>`
-          }</td>
-    </tr>`).join('');
-      } catch (e) {
-        clearInterval(msgTimer);
-        console.error(e);
-        tb.innerHTML = '<tr><td colspan="6" class="empty" style="color:var(--red)">Imeshindikana kupakia vifaa. Jaribu kuonyesha upya.</td></tr>';
-      }
-      finally { btnLoading(btn, false); clearInterval(msgTimer); }
-    }
+    // Devices page removed — DNS Guard handles device tracking via cache
 
     // Active Access
     async function refreshActiveAccess() {
@@ -2319,7 +2292,7 @@
         document.getElementById('cfgRouterIp').value = c.routerIp || '';
         document.getElementById('cfgRouterUser').value = c.routerUser || '';
         document.getElementById('cfgRouterPass').value = c.routerPass || '';
-        document.getElementById('cfgPlaywright').value = String(c.playwrightEnabled !== false);
+        // Playwright toggle removed — DNS Guard is the gatekeeper now
         document.getElementById('cfgServerIp').value = c.serverIp || '';
         document.getElementById('cfgAdminPin').value = c.adminPin || '2004';
         document.getElementById('cfgWifiSSID').value = c.wifiSSID || '';
@@ -2339,7 +2312,7 @@
         routerIp: document.getElementById('cfgRouterIp').value,
         routerUser: document.getElementById('cfgRouterUser').value,
         routerPass: document.getElementById('cfgRouterPass').value,
-        playwrightEnabled: document.getElementById('cfgPlaywright').value === 'true',
+        // playwrightEnabled removed — DNS Guard mode
         serverIp: document.getElementById('cfgServerIp').value,
         adminPin: document.getElementById('cfgAdminPin').value,
         wifiSSID: document.getElementById('cfgWifiSSID').value,
@@ -2377,7 +2350,7 @@
       ws.onmessage = e => {
         try {
           const m = JSON.parse(e.data);
-          if (m.type === 'devices_update') { refreshDevices(); loadDashboard(); }
+          if (m.type === 'devices_update') { loadDashboard(); }
           if (m.type === 'payment_completed') toast('💰 Malipo yamepokelewa! Ref: ' + m.reference, 'info');
           if (m.type === 'whitelist_updated') loadWhitelist();
           if (m.type === 'cutoff_triggered') toast('🕐 Muda wa cutoff (' + m.time + ') umefika — vouchers ' + m.expired_count + ' zimemalizika!', 'warn');
@@ -2421,60 +2394,43 @@
       <div class="code-card" id="code-card-${c.code}" style="text-align:left; padding:0; overflow:hidden">
         
         <!-- Header -->
-        <div style="background:linear-gradient(135deg,#6c5ce7,#a855f7); padding:8px 12px; text-align:center">
-          <div style="font-size:14px; font-weight:800; color:#fff; letter-spacing:1px">🌐 HotZone WiFi</div>
-          <div style="font-size:10px; color:rgba(255,255,255,.8); margin-top:1px">${c.label} · ${new Intl.NumberFormat('en-TZ').format(c.amount)} TZS · ${c.duration_hours} masaa</div>
+        <div style="background:linear-gradient(135deg,#6c5ce7,#a855f7); padding:10px 12px; text-align:center">
+          <div style="font-size:14px; font-weight:800; color:#fff; letter-spacing:1px">📡 HotZone WiFi</div>
+          <div style="font-size:10px; color:rgba(255,255,255,.8); margin-top:2px">${c.label} · ${new Intl.NumberFormat('en-TZ').format(c.amount)} TZS · ${c.duration_hours} masaa</div>
           <span class="code-badge ${c.status}" style="margin-top:4px">${c.status === 'unused' ? 'haijatumika' : 'imetumika'}</span>
         </div>
 
-        <!-- QR Codes -->
-        <div style="display:flex; justify-content:center; gap:12px; padding:8px 8px 4px; background:var(--s1)">
-          <div style="text-align:center; flex:1">
-             <div style="font-size:9px; font-weight:700; color:var(--green); margin-bottom:3px; text-transform:uppercase; letter-spacing:1px">Hatua 1</div>
-             <img src="/api/qr/connect" alt="WiFi QR" style="width:56px; height:56px; border-radius:4px; border:1px solid var(--border)">
-             <div style="font-size:9px; color:var(--td); margin-top:2px">Unganisha WiFi</div>
-          </div>
-          <div style="display:flex; align-items:center; color:var(--td); font-size:14px">→</div>
-          <div style="text-align:center; flex:1">
-             <div style="font-size:9px; font-weight:700; color:var(--accent); margin-bottom:3px; text-transform:uppercase; letter-spacing:1px">Hatua 2</div>
-             <img src="/api/qr/pay/${c.code}" alt="Redeem QR" style="width:56px; height:56px; border-radius:4px; border:1px solid var(--border)">
-             <div style="font-size:9px; color:var(--td); margin-top:2px">Tumia Voucher</div>
-          </div>
+        <!-- Single WiFi QR -->
+        <div style="text-align:center; padding:10px 8px 6px; background:var(--s1)">
+           <img src="/api/qr/connect" alt="WiFi QR" style="width:80px; height:80px; border-radius:6px; border:1px solid var(--border)">
+           <div style="font-size:10px; color:var(--green); margin-top:4px; font-weight:600">Scan kuunganisha WiFi</div>
         </div>
 
         <!-- Divider -->
         <div style="border-top:1px dashed var(--border); margin:0 8px"></div>
 
-        <!-- Manual Instructions -->
+        <!-- Captive Portal Instructions -->
         <div style="padding:8px 10px; font-size:11px; line-height:1.6; color:var(--t)">
-          <div style="font-weight:700; font-size:11px; margin-bottom:4px; color:var(--accent)">📋 Kamera haifanyi kazi? Fuata hatua hizi:</div>
+          <div style="font-weight:700; font-size:11px; margin-bottom:6px; color:var(--accent)">📋 Jinsi ya kutumia:</div>
           
           <div style="display:flex; gap:5px; align-items:flex-start; margin-bottom:3px">
             <span style="background:var(--green); color:#000; width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:8px; font-weight:800; flex-shrink:0">1</span>
-            <span>Fungua <strong>Settings</strong> → <strong>WiFi</strong> kwenye simu yako</span>
+            <span>Unganisha WiFi: <strong>${ssid}</strong>${pwd ? ' (password: <strong>' + pwd + '</strong>)' : ''}</span>
           </div>
           <div style="display:flex; gap:5px; align-items:flex-start; margin-bottom:3px">
             <span style="background:var(--green); color:#000; width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:8px; font-weight:800; flex-shrink:0">2</span>
-            <span>Chagua: <strong>${ssid}</strong></span>
-          </div>
-          <div style="display:flex; gap:5px; align-items:flex-start; margin-bottom:3px">
-            <span style="background:var(--green); color:#000; width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:8px; font-weight:800; flex-shrink:0">3</span>
-            <span>Weka password: <strong>${pwd || '(hakuna)'}</strong></span>
-          </div>
-          <div style="display:flex; gap:5px; align-items:flex-start; margin-bottom:3px">
-            <span style="background:var(--accent); color:#fff; width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:8px; font-weight:800; flex-shrink:0">4</span>
-            <span>Fungua Google, andika: <strong style="color:var(--accent)">${serverIp}:8000</strong></span>
+            <span>Ukurasa wa <strong>HotZone</strong> utafunguka <strong style="color:var(--green)">moja kwa moja</strong></span>
           </div>
           <div style="display:flex; gap:5px; align-items:flex-start">
-            <span style="background:var(--accent); color:#fff; width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:8px; font-weight:800; flex-shrink:0">5</span>
-            <span>Weka code yako hapo chini na bonyeza <strong>"Tumia Voucher"</strong></span>
+            <span style="background:var(--accent); color:#fff; width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:8px; font-weight:800; flex-shrink:0">3</span>
+            <span>Weka code yako hapo chini na bonyeza <strong>"Fungua Internet"</strong></span>
           </div>
         </div>
 
         <!-- Voucher Code Box -->
-        <div style="margin:0 10px 8px; padding:6px; border-radius:8px; background:linear-gradient(135deg,rgba(108,92,231,.15),rgba(168,85,247,.15)); border:2px solid var(--accent); text-align:center">
+        <div style="margin:0 10px 8px; padding:8px; border-radius:8px; background:linear-gradient(135deg,rgba(108,92,231,.15),rgba(168,85,247,.15)); border:2px solid var(--accent); text-align:center">
           <div style="font-size:9px; color:var(--td); text-transform:uppercase; letter-spacing:1px; margin-bottom:2px">Voucher Code</div>
-          <div style="font-size:20px; font-weight:800; letter-spacing:4px; color:var(--accent)">${c.code}</div>
+          <div style="font-size:22px; font-weight:800; letter-spacing:4px; color:var(--accent)">${c.code}</div>
         </div>
 
         <!-- Footer -->

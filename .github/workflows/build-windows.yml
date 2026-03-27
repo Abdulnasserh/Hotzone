@@ -25,21 +25,28 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller customtkinter
         
+    - name: Install Inno Setup
+      run: choco install innosetup
+        
     - name: Build with PyInstaller
       shell: powershell
       run: |
+        $ctk_path = (python -c "import customtkinter; import os; print(os.path.dirname(customtkinter.__file__))")
         pyinstaller `
           --noconfirm --onedir --windowed `
           --name HotZonePro `
           --icon=hotzone.ico `
           --add-data "static;static" `
           --add-data "hotzone-admin.html;." `
+          --add-data "$($ctk_path);customtkinter" `
+          --hidden-import "dnslib" `
+          --hidden-import "PIL._tkinter_finder" `
           gui.py
           
     - name: Compile Windows Installer (Inno Setup)
       shell: pwsh
       run: |
-        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+        iscc installer.iss
         
     - name: Upload Installer to GitHub Releases
       uses: softprops/action-gh-release@v1

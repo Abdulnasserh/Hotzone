@@ -3,3 +3,6 @@ uvicorn[standard]
 websockets
 httpx
 qrcode[pil]
+dnslib
+customtkinter
+pyinstaller

@@ -1,6 +1,6 @@
 #!/bin/bash
 echo "🚀 Prepping Environment for macOS Build..."
-pip3 install pyinstaller customtkinter
+pip3 install pyinstaller customtkinter dnslib
 pip3 install -r requirements.txt
 playwright install chromium
 

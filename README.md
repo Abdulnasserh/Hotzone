@@ -285,6 +285,42 @@ Setting `"acceptAll": false` means: **"Block everyone by default. Only allow dev
 
 ---
 
+### Step 9: Manage Port Forwarding / Virtual Server (CMD 27)
+
+To expose local servers or devices to the public internet, use the `OTHER_FILTER` command.
+
+**Request (Fetch existing rules):**
+```json
+{
+  "cmd": 27,
+  "method": "GET",
+  "sessionId": "your_session_id"
+}
+```
+
+**Request (Add/Update a rule):**
+```json
+{
+  "cmd": 27,
+  "method": "POST",
+  "sessionId": "your_session_id",
+  "token": "token_from_GET",
+  "datas": [
+    {
+      "port": "8080",            // External Port (or range "80:88")
+      "mappingIp": "192.168.1.10", // Target Internal IP
+      "mappingPort": "80",         // Target Internal Port
+      "mappingIpPort": "192.168.1.10:80", // Combined internal IP:Port
+      "remark": "MyWebServer",     // Rule Name
+      "enableRule": "true",        // "true" to enable, "false" to disable
+      "protocol": "TCP",           // "TCP", "UDP", or "TCP&UDP"
+      "ifName": "DEFAULT"          // Usually "DEFAULT"
+    }
+  ]
+}
+
+---
+
 ### Complete CMD Reference Table
 
 | CMD | Method | Purpose |
@@ -299,6 +335,13 @@ Setting `"acceptAll": false` means: **"Block everyone by default. Only allow dev
 | 28 | GET/POST | Read/set the global MAC filter policy (acceptAll true/false) |
 | 30 | GET/POST | Read/set secondary filter enforcement policy |
 | 80 | GET | Fetch router system info (firmware version, model, etc.) |
+| 27 | GET/POST | Manage Port Forwarding (Virtual Server) rules |
+| 272 | GET | Fetch VPN (L2TP/PPTP) Client Settings |
+| 269 | POST | Apply VPN Settings (Toggle ON/OFF) |
+| 260 | GET/POST | Manage GRE Tunnel Settings |
+| 279 | GET/POST | Manage L2TPv3 Bridge Settings |
+| 332 | GET/POST | Manage VXLAN Tunnel Settings |
+
 
 ---
 
@@ -378,4 +421,46 @@ The system automatically generates beautifully branded QR cards:
 
 ## Supported Routing Hardware
 - Out of the box: **ZTE-based 4G LTE CPE Routers** (Commonly branded by Airtel, MTN, Vodafone).
-- Any router where the web panel operates via `/cgi-bin/http.cgi` JSON commands.
+---
+
+## Step 10: VPN & Tunneling API (Bypassing CGNAT)
+
+To enable remote management over the internet (where the router is behind an ISP's CGNAT), you must use the VPN/Tunneling capabilities of the ZTE firmware. 
+
+**Important:** Only ONE tunnel type (VPN, GRE, L2TPv3, or VXLAN) can be active at a time.
+
+### VPN Client (L2TP/PPTP)
+*   **Fetch Settings (CMD 272)**
+*   **Apply Change (CMD 269):** Use this to remotely switch the VPN on or update the server IP.
+    *   `vpn_switch`: "1" (ON) / "0" (OFF)
+    *   `vpn_mode`: "0" (L2TP) / "1" (PPTP)
+    *   `vpn_url`: Your Google Cloud VM IP
+
+### Advanced Tunnels
+*   **GRE (CMD 260):** Ideal for fast, unencrypted point-to-point links.
+*   **L2TPv3 (CMD 279):** Used for Layer 2 bridging (making the router appear local to your server).
+*   **VXLAN (CMD 332):** Modern tunneling for cloud-based network orchestration.
+
+---
+
+## Step 11: Multi-tenant "SaaS Brain" Architecture (GCP)
+
+To scale HotZone Pro to multiple cafes, the system is designed to run on a central **Google Cloud VM (e2-micro)** acting as the master controller.
+
+### 1. Cloud Infrastructure Selection
+*   **Region:** Use `us-west1`, `us-central1`, or `us-east1` to qualify for the **GCP Always Free Tier**.
+*   **Machine Type:** `e2-micro` (2 vCPU, 1 GB RAM).
+*   **OS:** `Ubuntu 24.04 LTS Minimal` (x86_64).
+*   **Disk:** 30 GB Standard Persistent Disk (Free Tier limit).
+*   **Static IP:** You **must** reserve a Static External IP for your VM so routers never lose the connection to the "Brain."
+
+### 2. Networking Configuration
+*   **Firewall:** Allow `HTTP` (80), `HTTPS` (443), and `UDP 500, 4500, 1701` (for L2TP/IPsec VPN).
+*   **IP Forwarding:** This must be **Enabled** in the VM's network interface settings to allow the Brain to route customer traffic to the internet.
+
+### 3. Server-Side Stack
+*   **VPN Server:** `xl2tpd` + `strongswan` (L2TP/IPsec).
+*   **DNS Interceptor:** `dnsmasq` (to capture captive portal checks and redirect them to the VM).
+*   **Application:** `FastAPI` + `SQLite` (Managing users, multi-tenant router tokens, and payments).
+
+By moving the logic to the cloud, the local Airtel router becomes a simple "remote enforcer" that receives "Block/Unblock" commands from the VM over the secure VPN tunnel.

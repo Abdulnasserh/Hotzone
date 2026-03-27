@@ -161,7 +161,7 @@ async def scrape_devices() -> list[dict]:
                         "router_allowed": True
                     })
 
-            logger.info(f"API Scraper: Found {len(dhcp_list)} devices in DHCP, {len(allowed_macs)} authorized MACs.")
+            logger.debug(f"🛰️ [HARDWARE STATUS] {len(allowed_macs)} devices physically whitelisted on router hardware.")
             return devices
 
         except Exception as e:
