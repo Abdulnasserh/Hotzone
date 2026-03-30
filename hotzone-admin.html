@@ -1250,9 +1250,8 @@
           class="icon">🟢</span>Mtandaoni</div>
       <div class="nav-item" data-page="customers" onclick="showPage('customers')"><span class="icon">👥</span>Wateja
       </div>
-      <div class="nav-item" data-page="vouchers" onclick="showPage('vouchers')"><span class="icon">🎫</span>Vouchers
-      </div>
-      <div class="nav-item" data-page="qrcodes" onclick="showPage('qrcodes')"><span class="icon">📱</span>QR Codes</div>
+      <div class="nav-item" data-page="vouchers" onclick="showPage('vouchers')"><span class="icon">🎫</span>Vouchers</div>
+
       <div class="nav-item" data-page="whitelist" onclick="showPage('whitelist')"><span class="icon">🛡️</span>Whitelist
       </div>
       <div class="nav-item" data-page="settings" onclick="showPage('settings')"><span class="icon">⚙️</span>Mipangilio
@@ -1271,6 +1270,7 @@
       </div>
       <div class="nav-item" data-page="vouchers" onclick="showPage('vouchers')"><span class="icon">🎫</span>Vouchers
       </div>
+
       <div class="nav-item" data-page="settings" onclick="showPage('settings')"><span class="icon">⚙️</span>Mipangilio
       </div>
       <div class="nav-item" data-page="manual" onclick="showPage('manual')"><span class="icon">📖</span>Mwongozo</div>
@@ -1473,31 +1473,7 @@
 
 
 
-      <!-- Vouchers -->
-      <div class="page" id="page-vouchers">
-        <h2>Vouchers</h2>
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Simu</th>
-                <th>MAC</th>
-                <th>Hostname</th>
-                <th>Kiasi</th>
-                <th>Status</th>
-                <th>Muda Uliobaki</th>
-                <th>Imeundwa</th>
-              </tr>
-            </thead>
-            <tbody id="vouchersTable">
-              <tr>
-                <td colspan="8" class="empty">Inapakia...</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
+
 
       <!-- Whitelist -->
       <div class="page" id="page-whitelist">
@@ -1526,9 +1502,10 @@
         </div>
       </div>
 
-      <!-- QR Codes na Voucher Codes -->
-      <div class="page" id="page-qrcodes">
-        <h2>QR Codes na Voucher Codes</h2>
+      <!-- Vouchers (Zamani QR Codes) -->
+      <div class="page" id="page-vouchers">
+        <h2>Vouchers</h2>
+
 
         <!-- WiFi Connect QR only -->
         <div class="cards" style="margin-bottom:24px">
@@ -1898,8 +1875,8 @@
       if (p === 'dashboard') loadDashboard();
       if (p === 'activeaccess') refreshActiveAccess();
       if (p === 'customers') loadCustomers();
-      if (p === 'vouchers') loadVouchers();
-      if (p === 'qrcodes') loadVoucherCodes();
+      if (p === 'vouchers') loadVoucherCodes();
+
       if (p === 'whitelist') loadWhitelist();
       if (p === 'settings') loadSettings();
       if (p === 'manual') { /* Static page, no load needed */ }
@@ -2229,20 +2206,7 @@
       finally { hideActivity(); refreshCurrentPage(); }
     }
 
-    // Vouchers
-    async function loadVouchers() {
-      const tb = document.getElementById('vouchersTable');
-      tb.innerHTML = '<tr class="table-loading"><td colspan="8" style="text-align:center;padding:24px;color:var(--td)"><span style="display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;margin-right:8px"></span>Inapakia vouchers...</td></tr>';
-      try {
-        const vouchers = await fetchRetry(API + '/api/vouchers').then(r => r.json());
-        if (!vouchers.length) { tb.innerHTML = '<tr><td colspan="8" class="empty">Hakuna vouchers</td></tr>'; return; }
-        tb.innerHTML = vouchers.slice().reverse().map(v => `<tr>
-      <td>${v.id}</td><td>${v.phone || '—'}</td><td style="font-size:11px">${v.mac}</td><td>${v.hostname || '—'}</td>
-      <td>${fmtCurrency(v.amount)}</td><td><span class="badge ${v.status}">${v.status}</span></td>
-      <td class="timer">${fmtTime(v.time_remaining)}</td><td>${fmtDate(v.created)}</td>
-    </tr>`).join('');
-      } catch (e) { console.error(e); tb.innerHTML = '<tr><td colspan="8" class="empty" style="color:var(--red)">Imeshindikana kupakia vouchers</td></tr>'; }
-    }
+
 
     // Whitelist
     async function loadWhitelist() {
