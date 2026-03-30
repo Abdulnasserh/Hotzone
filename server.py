@@ -7,6 +7,7 @@ import json
 import logging
 from logging.handlers import RotatingFileHandler
 import uuid
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,20 @@ STATIC_DIR = BUNDLE_DIR / "static"
 ADMIN_PAGE_PATH = BUNDLE_DIR / "hotzone-admin.html"
 
 # ---------------------------------------------------------------------------
+# Global Speed Cache (Reduces DB load for DNS Queries)
+# ---------------------------------------------------------------------------
+_AUTH_CACHE = set()  # Set of authorized MAC addresses (UPPER)
+_WL_CACHE = set()    # Set of whitelisted MAC addresses (UPPER)
+_LAST_CACHE_REFRESH = 0
+_LAST_HARDWARE_AUDIT = 0
+_discovery_cooldown = {} # {ip: timestamp} to prevent router hammering
+
+# ---------------------------------------------------------------------------
+# Global Shared Loop for Threads to call Async
+# ---------------------------------------------------------------------------
+MAIN_LOOP = None
+
+# ---------------------------------------------------------------------------
 # Logging (Production Ready)
 # ---------------------------------------------------------------------------
 log_formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
@@ -55,6 +70,7 @@ log_handler = RotatingFileHandler(DATA_DIR / "hotzone.log", maxBytes=10*1024*102
 log_handler.setFormatter(log_formatter)
 
 logging.basicConfig(level=logging.INFO, handlers=[log_handler, logging.StreamHandler(sys.stdout)])
+logging.getLogger("httpx").setLevel(logging.WARNING) # Silence router API POST logs
 logger = logging.getLogger("hotzone")
 
 # ---------------------------------------------------------------------------
@@ -266,8 +282,16 @@ class CaptivePortalMiddleware(BaseHTTPMiddleware):
         server_ip = config.get("serverIp", "192.168.1.162")
         portal_domain = "hotzone.portal"
         
-        # 1. Skip middleware for internal app routes
-        if path.startswith(("/api/", "/static/", "/ws", "/admin")) or host in (server_ip, "localhost", "127.0.0.1", portal_domain):
+        # 1. Skip middleware for internal app routes AND captive portal detection URLs
+        # (Let dedicated handlers send correct OS-specific responses)
+        captive_portal_paths = [
+            "/generate_204", "/gen_204", "/hotspot-detect.html",
+            "/ncsi.txt", "/connecttest.txt", "/success.txt",
+            "/success.html", "/check_network_status"
+        ]
+        if (path.startswith(("/api/", "/static/", "/ws", "/admin")) or
+            path in captive_portal_paths or
+            host in (server_ip, "localhost", "127.0.0.1", portal_domain)):
             return await call_next(request)
 
         # 2. Check Authorization Status (The "Anti-Loop" Check)
@@ -443,16 +467,28 @@ async def serve_customer_page():
 @app.head("/gen_204")
 async def handle_android_check(request: Request):
     """Handle Android/Chrome captive portal check."""
+    client_ip = request.client.host if request.client else "unknown"
+    logger.info(f"📱 [ANDROID] Captive portal check from {client_ip} - Redirecting to portal")
     config = get_config()
     server_ip = config.get("serverIp", "192.168.1.162")
-    return RedirectResponse(url=f"http://{server_ip}/", status_code=302)
+    headers = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0"
+    }
+    # 🛡️ Android 14 Fix: Redirect to IP directly, avoiding second DNS lookup that can fail
+    portal_url = f"http://{server_ip}/"
+    return RedirectResponse(url=portal_url, status_code=302, headers=headers)
 
 @app.get("/hotspot-detect.html")
 async def handle_apple_check(request: Request):
     """Handle Apple captive portal check (captive.apple.com)."""
+    client_ip = request.client.host if request.client else "unknown"
+    logger.info(f"🍎 [APPLE] Captive portal check from {client_ip} - Redirecting to portal")
     config = get_config()
     server_ip = config.get("serverIp", "192.168.1.162")
-    return RedirectResponse(url=f"http://{server_ip}/", status_code=302)
+    headers = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
+    return RedirectResponse(url=f"http://{server_ip}/", status_code=302, headers=headers)
 
 @app.get("/ncsi.txt")
 @app.head("/ncsi.txt")
@@ -460,13 +496,23 @@ async def handle_apple_check(request: Request):
 @app.head("/connecttest.txt")
 async def handle_windows_check(request: Request):
     """Handle Windows connectivity checks."""
+    client_ip = request.client.host if request.client else "unknown"
+    logger.info(f"🪟 [WINDOWS] Captive portal check from {client_ip} - Redirecting to portal")
     config = get_config()
     server_ip = config.get("serverIp", "192.168.1.162")
-    return RedirectResponse(url=f"http://{server_ip}/", status_code=302)
+    headers = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
+    return RedirectResponse(url=f"http://{server_ip}/", status_code=302, headers=headers)
 
 @app.get("/success.html")
 async def handle_generic_check():
-    return HTMLResponse("<TITLE>Success</TITLE>", status_code=200)
+    """Generic success page for some devices."""
+    return HTMLResponse("<TITLE>Success</TITLE><body>Connected</body>", status_code=200)
+
+# Additional Android detection endpoint
+@app.get("/gen_204")
+async def handle_gen_204(request: Request):
+    """Alternative Android detection endpoint."""
+    return await handle_android_check(request)
 
 @app.get("/admin", response_class=HTMLResponse)
 async def serve_admin_page():
@@ -1521,6 +1567,7 @@ async def expiry_enforcer():
                     logger.warning(f"Cutoff check error: {e}")
 
             # ── Normal per-voucher expiry ──
+            current_active_macs = set()
             for v in vouchers:
                 if v.get("status") not in ("active", "expired"):
                     continue
@@ -1551,7 +1598,14 @@ async def expiry_enforcer():
                         save_devices_store(devices_store)
                 elif v["status"] == "active":
                     # If active, ensure it's physically unblocked on router hardware
-                    verified_active_macs.add(v["mac"].upper())
+                    v_mac = v["mac"].upper()
+                    verified_active_macs.add(v_mac)
+                    current_active_macs.add(v_mac)
+
+            # 🛡️ REFRESH HIGH-SPEED CACHE
+            global _AUTH_CACHE, _WL_CACHE
+            _AUTH_CACHE = current_active_macs
+            _WL_CACHE = {w["mac"].upper() for w in get_whitelist()}
 
             if changed:
                 save_vouchers(vouchers)
@@ -1625,7 +1679,7 @@ class SmartDNS:
             
             # 3. Proxy Handler
             self.proxy_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.proxy_sock.settimeout(2.5) 
+            self.proxy_sock.settimeout(1.0) # Faster timeout for mobile responsiveness
 
             self.running = True
             logger.info(f"📡 SmartDNS Hijacker listening (UDP & TCP) on {self.listen_ip}:{self.port}")
@@ -1754,6 +1808,10 @@ class SmartDNS:
                 portal_domain = "hotzone.portal"
                 
                 reply = request.reply()
+                # 🛡️ Fix for Android 14/15: Set RA/AA flags so OS trusts our hijacked response
+                reply.header.ra = 1 
+                reply.header.aa = 1
+                
                 if qtype == QTYPE.A:
                     # Point BOTH the original query AND our local portal domain to our IP
                     reply.add_answer(RR(qname + ".", QTYPE.A, rdata=A(server_ip), ttl=1))
@@ -1761,6 +1819,7 @@ class SmartDNS:
                         logger.info(f"🛡️ DNS Hijacked: {client_ip} -> {qname} redirected to {server_ip}")
                 elif qtype == QTYPE.AAAA:
                     # Returning NXDOMAIN forces the device to use the Hijacked A record (IPv4)
+                    # This is CRITICAL for Android 14/15
                     reply.header.rcode = 3 # NXDOMAIN
                 
                 if self.udp_sock and proto == "udp":
@@ -1799,12 +1858,14 @@ class SmartDNS:
         config = get_config()
         server_ip = config.get("serverIp", "")
         local_ip = self._get_local_ip()
-        
+
         if client_ip in (server_ip, local_ip, "127.0.0.1") and client_ip:
-            if client_ip == "127.0.0.1": 
+            if client_ip == "127.0.0.1":
                 return False
             logger.debug(f"✅ DNS Auth: Server itself ({client_ip}) authorized.")
             return True
+
+        logger.debug(f"🔍 [DNS AUTH] Checking authorization for {client_ip}")
 
         # 🛡️ Identity Mirror & Grace Period
         grace = _ip_auth_grace.get(client_ip)
@@ -1813,7 +1874,10 @@ class SmartDNS:
             # If in 5 min grace window
             if (datetime.now() - ts).total_seconds() < 300: 
                 # PROACTIVE: If we haven't resolved this IP's MAC in the last 20s, trigger refresh
-                if client_ip not in self._pending_lookups and MAIN_LOOP:
+                now_ts = time.time()
+                last_call = _discovery_cooldown.get(client_ip, 0)
+                if (now_ts - last_call) > 20 and client_ip not in self._pending_lookups and MAIN_LOOP:
+                    _discovery_cooldown[client_ip] = now_ts
                     self._pending_lookups.add(client_ip)
                     asyncio.run_coroutine_threadsafe(self._resolve_mac_from_router(client_ip), MAIN_LOOP)
 
@@ -1848,8 +1912,11 @@ class SmartDNS:
                     break
         
         if not mac:
-            # UNKNOWN IP: Trigger background router API call ONCE to find the MAC
-            if client_ip not in self._pending_lookups and MAIN_LOOP:
+            # UNKNOWN IP: Trigger background router API call with 30s cooldown
+            now_ts = time.time()
+            last_call = _discovery_cooldown.get(client_ip, 0)
+            if (now_ts - last_call) > 30 and client_ip not in self._pending_lookups and MAIN_LOOP:
+                _discovery_cooldown[client_ip] = now_ts
                 logger.debug(f"🔍 DNS Auth: No MAC for {client_ip}, triggering discovery...")
                 self._pending_lookups.add(client_ip)
                 asyncio.run_coroutine_threadsafe(self._resolve_mac_from_router(client_ip), MAIN_LOOP)
@@ -1862,23 +1929,15 @@ class SmartDNS:
         # Track this device for the Admin UI
         dns_track_device(client_ip, mac=mac)
 
-        # Step 2: Check Whitelist (DB)
-        for w in get_whitelist():
-            if w.get("mac", "").upper() == mac:
-                logger.debug(f"✅ DNS Auth: MAC {mac} is whitelisted.")
-                return True
+        # ⚡ HIGH SPEED MEMORY CHECK (Minimal Latency)
+        if mac in _WL_CACHE:
+            logger.debug(f"✅ DNS Auth (CACHE): MAC {mac} is whitelisted.")
+            return True
+        if mac in _AUTH_CACHE:
+            logger.debug(f"✅ DNS Auth (CACHE): MAC {mac} has active voucher.")
+            return True
 
-        # Step 3: Check active Vouchers (DB)
-        now = datetime.now()
-        for v in get_vouchers():
-            if v.get("mac", "").upper() == mac and v.get("status") == "active":
-                try:
-                    if datetime.fromisoformat(v["expires"]) > now:
-                        logger.debug(f"✅ DNS Auth: MAC {mac} has active voucher.")
-                        return True
-                except: pass
-        
-        logger.debug(f"🚫 DNS Auth: MAC {mac} ({client_ip}) is NOT authorized.")
+        logger.info(f"🚫 [DNS AUTH] Device {client_ip} (MAC: {mac}) is NOT authorized - WILL HIJACK")
         return False
 
     async def _resolve_mac_from_router(self, client_ip, silent=False):
@@ -2066,34 +2125,23 @@ if __name__ == "__main__":
     import webbrowser
     import threading
     
-    # Force-kill on Ctrl+C so the process never hangs
+    # 1. Force-kill on Ctrl+C so the process never hangs
     def _force_exit(sig, frame):
         print("\n🛑 Server stopping...")
         os._exit(0)
     signal.signal(signal.SIGINT, _force_exit)
     signal.signal(signal.SIGTERM, _force_exit)
 
-    # Auto-launch the Admin Portal locally when the server starts
+    # 2. Auto-launch the Admin Portal locally when the server starts
     def _open_admin(port):
         time.sleep(2.0)
         url = f"http://127.0.0.1:{port}/admin" if port != 80 else "http://127.0.0.1/admin"
         logger.info(f"🌐 Opening admin: {url}")
         webbrowser.open(url)
 
-if __name__ == "__main__":
-    def _open_admin(port):
-        import time
-        import webbrowser
-        time.sleep(2.0)
-        url = f"http://127.0.0.1:{port}/admin" if port != 80 else "http://127.0.0.1/admin"
-        logger.info(f"🌐 Opening admin: {url}")
-        webbrowser.open(url)
-
-    # Start HTTP on Port 80
-    logger.info("🚀 Starting Web Portal (HTTP-only) on Port 80...")
-    import uvicorn
+    # 3. Start Web Portal (HTTP-only) on Port 80
+    logger.info("🚀 Starting Web Portal...")
     try:
-        # Launch admin browser in background
         threading.Thread(target=_open_admin, args=(80,), daemon=True).start()
         uvicorn.run(app, host="0.0.0.0", port=80, log_level="info", reload=False)
     except Exception as e:

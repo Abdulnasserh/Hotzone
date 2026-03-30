@@ -61,7 +61,9 @@ jobs:
         
     - name: Upload Installer as Artifact
       uses: actions/upload-artifact@v4
+      continue-on-error: true
       with:
         name: HotZonePro-Setup
         path: Output/HotZonePro_Setup.exe
+        retention-days: 1
 
