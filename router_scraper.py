@@ -90,15 +90,9 @@ async def _ensure_logged_in(client, config):
         await _login(client, config)
         return
         
-    # Verify session is still valid
-    try:
-        res = await client.post("/cgi-bin/http.cgi", json={"cmd": 269, "method": "GET", "sessionId": _session_id, "language": "en"})
-        data = res.json()
-        if data.get("message") == "NO_AUTH" or not data.get("success"):
-            logger.info("API Session expired. Re-authenticating...")
-            await _login(client, config)
-    except Exception:
-        await _login(client, config)
+    # Optimistic Keep-Alive: We assume _session_id is valid. 
+    # Any real request that fails with NO_AUTH will reset _session_id and trigger a retry.
+    # This prevents an unnecessary preliminary POST request, saving ~500ms per block/unblock.
 
 
 async def scrape_devices() -> list[dict]:
@@ -115,7 +109,9 @@ async def scrape_devices() -> list[dict]:
             # 1. Scrape DHCP (CMD 223)
             dhcp_res = await client.post("/cgi-bin/http.cgi", json={"cmd": 223, "method": "GET", "language": "en", "sessionId": _session_id})
             dhcp_data = dhcp_res.json()
-            
+            if dhcp_data.get("message") == "NO_AUTH":
+                raise Exception("Session expired (NO_AUTH)")
+                
             # fallback to connected_devices (CMD 394 or similar) if needed, but 223 is usually standard
             dhcp_list = dhcp_data.get("dhcp_list_info", [])
             
@@ -303,7 +299,13 @@ async def _queue_worker():
                     # After giving up, we put them back and set the event so they get retried eventually.
                     _pending_adds.update(adds)
                     _pending_deletes.update(deletes)
-                    logger.error(f"Batch API gave up after 3 attempts. Adds:{adds} Deletes:{deletes}")
+                    logger.error(f"Batch API gave up after 3 attempts. Adds:{adds} Deletes:{deletes}. Queuing for persistent retry...")
+                    
+                    # 🛡️ Persistent Retry Queue: Trigger worker again after 15s delay
+                    async def _trigger_retry():
+                        await asyncio.sleep(15)
+                        _queue_event.set()
+                    asyncio.create_task(_trigger_retry())
 
 
 async def block_device(mac: str) -> bool:

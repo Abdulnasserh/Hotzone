@@ -248,6 +248,27 @@ async def lifespan(app: FastAPI):
         logger.debug(f"Cleanup note: {e}")
     await pw_cleanup()
 
+def start_dummy_https_server():
+    """Start a lightweight dummy TLS server on port 443 to immediately reset connections.
+    This forces Android/iOS devices to instantly fallback to HTTP port 80 for captive portal detection."""
+    def _dummy_server_loop():
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("0.0.0.0", 443))
+            sock.listen(100)
+            logger.info("🔒 Dummy HTTPS (443) interceptor running (forces instant captive portal HTTP fallback)...")
+            while True:
+                conn, _ = sock.accept()
+                # Immediately close to force an SSL reset, triggering OS fallback
+                conn.close()
+        except PermissionError:
+            logger.warning("Port 443 interceptor needs root/sudo. Proceeding without dummy HTTPS server.")
+        except Exception as e:
+            logger.debug(f"Port 443 interceptor error: {e}")
+            
+    threading.Thread(target=_dummy_server_loop, daemon=True).start()
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -1613,7 +1634,7 @@ async def expiry_enforcer():
             # --- Proactive Hardware Verification ---
             # 🛡️ Audit hardware sparingly (every 5 minutes) to protect router memory
             global _LAST_HARDWARE_AUDIT
-            if verified_active_macs and MAIN_LOOP and (time.time() - _LAST_HARDWARE_AUDIT) > 300:
+            if MAIN_LOOP and (time.time() - _LAST_HARDWARE_AUDIT) > 300:
                 _LAST_HARDWARE_AUDIT = time.time()
                 async def _verify_hardware():
                     try:
@@ -1621,10 +1642,18 @@ async def expiry_enforcer():
                         hardware_devices = await scrape_devices()
                         router_allowed = {d["mac"].upper() for d in hardware_devices if d.get("router_allowed")}
                         
+                        # 1. Verify Active devices are unblocked
                         for mac in verified_active_macs:
                             if mac not in router_allowed:
                                 logger.warning(f"🚨 [HARDWARE DESYNC] {mac} is ACTIVE in server but BLOCKED in router hardware! FORCING ACCESS...")
                                 await unblock_device(mac)
+                        
+                        # 2. Verify Blocked devices are NOT allowed
+                        for mac in router_allowed:
+                            if mac not in verified_active_macs:
+                                logger.warning(f"🚨 [HARDWARE DESYNC] {mac} is BLOCKED in server but ALLOWED in router hardware! FORCING BLOCK...")
+                                await block_device(mac)
+                                
                     except Exception as e:
                         logger.error(f"Hardware sync check failed: {e}")
 
@@ -2141,6 +2170,7 @@ if __name__ == "__main__":
 
     # 3. Start Web Portal (HTTP-only) on Port 80
     logger.info("🚀 Starting Web Portal...")
+    start_dummy_https_server()
     try:
         threading.Thread(target=_open_admin, args=(80,), daemon=True).start()
         uvicorn.run(app, host="0.0.0.0", port=80, log_level="info", reload=False)
