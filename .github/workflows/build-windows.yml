@@ -33,7 +33,7 @@ jobs:
       run: |
         $ctk_path = (python -c "import customtkinter; import os; print(os.path.dirname(customtkinter.__file__))")
         pyinstaller `
-          --noconfirm --onedir --windowed `
+          --noconfirm --onedir --windowed --uac-admin `
           --name HotZonePro `
           --icon=hotzone.ico `
           --add-data "static;static" `
