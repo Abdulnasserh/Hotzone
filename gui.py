@@ -164,11 +164,15 @@ class ServerGUI(ctk.CTk):
             try:
                 config = uvicorn.Config(app=app, host="0.0.0.0", port=80, log_level="info")
                 self.server_instance = uvicorn.Server(config=config)
+                # Launch browser for port 80
+                threading.Timer(2.0, lambda: webbrowser.open("http://127.0.0.1/admin")).start()
                 self.server_instance.run()
             except Exception:
                 # Fallback to Port 8000
                 config = uvicorn.Config(app=app, host="0.0.0.0", port=8000, log_level="info")
                 self.server_instance = uvicorn.Server(config=config)
+                # Launch browser for port 8000
+                threading.Timer(2.0, lambda: webbrowser.open("http://127.0.0.1:8000/admin")).start()
                 self.server_instance.run()
         except Exception as e:
             def show_error():
@@ -184,9 +188,6 @@ class ServerGUI(ctk.CTk):
         
         self.server_thread = threading.Thread(target=self.run_uvicorn, daemon=True)
         self.server_thread.start()
-        
-        # Auto-launch Admin Portal after server has had time to bind
-        threading.Timer(2.0, lambda: webbrowser.open("http://127.0.0.1:8000/admin")).start()
 
     def stop_server(self):
         self.start_btn.configure(state="normal")
