@@ -1850,13 +1850,14 @@ class SmartDNS:
                     # Returning NXDOMAIN forces the device to use the Hijacked A record (IPv4)
                     # This is CRITICAL for Android 14/15
                     reply.header.rcode = 3 # NXDOMAIN
-                
-                if self.udp_sock and proto == "udp":
-                    self.udp_sock.sendto(reply.pack(), addr)
-                
-                if return_only:
-                    return reply.pack()
-                return None
+            
+            # Send response for BOTH authorized and unauthorized users
+            if self.udp_sock and proto == "udp" and reply:
+                self.udp_sock.sendto(reply.pack(), addr)
+            
+            if return_only and reply:
+                return reply.pack()
+            return None
 
         except Exception as e:
             # Log full traceback if it's a critical error
