@@ -13,8 +13,10 @@ from pathlib import Path
 from typing import Any
 import webbrowser
 import threading
+import socket
 import qrcode
 from qrcode.image.styledpil import StyledPilImage
+from dnslib import DNSRecord, QTYPE, RR, A
 
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
@@ -22,12 +24,13 @@ from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from router_scraper import scrape_devices, block_device, unblock_device, sync_whitelist_to_router, purge_unauthorized_macs, shutdown_scraper, cleanup as pw_cleanup
+from router_scraper import scrape_devices, block_device, unblock_device, sync_whitelist_to_router, purge_unauthorized_macs, shutdown_scraper, cleanup as pw_cleanup, disable_whitelist_mode, set_dhcp_dns
 
 import sys
 import os
-import socket
-from dnslib import DNSRecord, QTYPE, RR, A
+import subprocess
+import platform
+
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -49,15 +52,6 @@ STATIC_DIR = BUNDLE_DIR / "static"
 ADMIN_PAGE_PATH = BUNDLE_DIR / "hotzone-admin.html"
 
 # ---------------------------------------------------------------------------
-# Global Speed Cache (Reduces DB load for DNS Queries)
-# ---------------------------------------------------------------------------
-_AUTH_CACHE = set()  # Set of authorized MAC addresses (UPPER)
-_WL_CACHE = set()    # Set of whitelisted MAC addresses (UPPER)
-_LAST_CACHE_REFRESH = 0
-_LAST_HARDWARE_AUDIT = 0
-_discovery_cooldown = {} # {ip: timestamp} to prevent router hammering
-
-# ---------------------------------------------------------------------------
 # Global Shared Loop for Threads to call Async
 # ---------------------------------------------------------------------------
 MAIN_LOOP = None
@@ -72,6 +66,11 @@ log_handler.setFormatter(log_formatter)
 logging.basicConfig(level=logging.INFO, handlers=[log_handler, logging.StreamHandler(sys.stdout)])
 logging.getLogger("httpx").setLevel(logging.WARNING) # Silence router API POST logs
 logger = logging.getLogger("hotzone")
+
+# ---------------------------------------------------------------------------
+# System state — passive until user presses "Washa System"
+# ---------------------------------------------------------------------------
+_enforcer_task = None
 
 # ---------------------------------------------------------------------------
 # SQLite Relational Database Layer
@@ -168,11 +167,6 @@ def delete_nickname(mac: str):
     except Exception: pass
 
 # ---------------------------------------------------------------------------
-# Global Shared Loop for Threads to call Async
-# ---------------------------------------------------------------------------
-MAIN_LOOP = None
-
-# ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
 
@@ -197,77 +191,19 @@ async def lifespan(app: FastAPI):
     MAIN_LOOP = asyncio.get_running_loop()
     logger.info("🔥 HotZone WiFi Voucher Server starting...")
 
-    # Lightweight startup: just log what's in the DB, no router scraping
-    global _initial_scrape_done
-    whitelist = get_whitelist()
-    wl_macs = {w["mac"].upper() for w in whitelist}
-    now = datetime.now()
-    vouchers = get_vouchers()
-    active_voucher_macs = {
-        v["mac"].upper() for v in vouchers
-        if v.get("status") == "active"
-        and datetime.fromisoformat(v["expires"]) > now
-    }
-    allowed = wl_macs | active_voucher_macs
-    logger.info(f"Startup: allowed MACs (from DB) = {allowed}")
-    
-    # Enforce Whitelist MAC Filtering on router
-    allowed_list = [{"mac": mac} for mac in allowed]
-    asyncio.create_task(sync_whitelist_to_router(allowed_list))
-    asyncio.create_task(purge_unauthorized_macs(allowed))
-    
-    # 🛡️ Restore Identity Mirror Grace Table (survives restarts)
-    for v in vouchers:
-        v_mac = v.get("mac", "").upper()
-        v_ip = v.get("ip")
-        if v.get("status") == "active" and v_ip and v_mac:
-            # Re-seed the grace table with all active voucher IPs
-            # This allows the 'Identity Mirror' to catch switches after a restart
-            _ip_auth_grace[v_ip] = (v_mac, datetime.now())
-    
-    _initial_scrape_done = True  # No router scrape needed anymore
-
-    # Only the expiry enforcer runs now (checks DB every 30s, calls router ONLY to block)
-    enforcer_task = asyncio.create_task(expiry_enforcer())
-
-    # Start SmartDNS Hijacker (this IS the gatekeeper now)
-    dns_server = SmartDNS()
-    dns_thread = threading.Thread(target=dns_server.start, daemon=True)
-    dns_thread.start()
-    app.state.dns_server = dns_server
-    logger.info("✅ DNS-based captive portal is the gatekeeper. No constant router polling.")
+    logger.info("ℹ️ Server passive — press 'Washa System' to enable DNS blocking + router whitelist")
 
     yield
     logger.info("Shutting down — cleaning up tasks and connections...")
     try:
-        enforcer_task.cancel()
-        dns_server.stop()
+        if _enforcer_task:
+            _enforcer_task.cancel()
+        _dns_blocker.stop()
         await shutdown_scraper()
         await pw_cleanup()
     except Exception as e:
         logger.debug(f"Cleanup note: {e}")
     await pw_cleanup()
-
-def start_dummy_https_server():
-    """Start a lightweight dummy TLS server on port 443 to immediately reset connections.
-    This forces Android/iOS devices to instantly fallback to HTTP port 80 for captive portal detection."""
-    def _dummy_server_loop():
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(("0.0.0.0", 443))
-            sock.listen(100)
-            logger.info("🔒 Dummy HTTPS (443) interceptor running (forces instant captive portal HTTP fallback)...")
-            while True:
-                conn, _ = sock.accept()
-                # Immediately close to force an SSL reset, triggering OS fallback
-                conn.close()
-        except PermissionError:
-            logger.warning("Port 443 interceptor needs root/sudo. Proceeding without dummy HTTPS server.")
-        except Exception as e:
-            logger.debug(f"Port 443 interceptor error: {e}")
-            
-    threading.Thread(target=_dummy_server_loop, daemon=True).start()
 
 # ---------------------------------------------------------------------------
 # App
@@ -287,120 +223,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import RedirectResponse, HTMLResponse
-from fastapi import Request, HTTPException
-import uuid
 
-class CaptivePortalMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        client_ip = request.client.host if request.client else "unknown"
-        host = request.headers.get("host", "").split(":")[0]
-        ua = request.headers.get("user-agent", "").lower()
-        path = request.url.path
-        
-        config = get_config()
-        server_ip = config.get("serverIp", "192.168.1.162")
-        portal_domain = "hotzone.portal"
-        
-        # 1. Skip middleware for internal app routes AND captive portal detection URLs
-        # (Let dedicated handlers send correct OS-specific responses)
-        captive_portal_paths = [
-            "/generate_204", "/gen_204", "/hotspot-detect.html",
-            "/ncsi.txt", "/connecttest.txt", "/success.txt",
-            "/success.html", "/check_network_status"
-        ]
-        if (path.startswith(("/api/", "/static/", "/ws", "/admin")) or
-            path in captive_portal_paths or
-            host in (server_ip, "localhost", "127.0.0.1", portal_domain)):
-            return await call_next(request)
-
-        # 2. Check Authorization Status (The "Anti-Loop" Check)
-        dns_server = getattr(request.app.state, "dns_server", None)
-        is_authorized = False
-        if dns_server:
-            is_authorized = dns_server.is_mac_authorized(client_ip)
-            
-        # 🛡️ IDENTITY MIRROR: Check for session cookie if not authorized via MAC
-        if not is_authorized:
-            session_cookie = request.cookies.get("hotzone_session")
-            if session_cookie and dns_server:
-                # Attempt to mirror this session to the new identity
-                logger.info(f"🧬 [MIRROR] Unauthorized client {client_ip} has session cookie. Attempting sync...")
-                synced_mac = dns_server.sync_from_cookie(session_cookie, client_ip)
-                if synced_mac:
-                    logger.info(f"✅ [MIRROR] Identity mirrored successfully! New MAC: {synced_mac}")
-                    is_authorized = True
-
-            
-        # 3. Handle Authorized Devices (DNS Cache Fallback)
-        if is_authorized:
-            # If an authorized device hits a tracking probe, give it the "all clear" signal
-            if path in ["/generate_204", "/gen_204", "/hotspot-detect.html", "/ncsi.txt", "/connecttest.txt", "/success.txt", "/check_network_status"]:
-                logger.info(f"✅ [POST-AUTH] Authorized client {client_ip} hit {path}. Returning 204.")
-                return Response(status_code=204)
-            
-            # If they hit us with a regular domain (e.g. google.com) due to old DNS cache
-            if host and host not in (server_ip, "localhost", "127.0.0.1", portal_domain):
-                logger.info(f"💡 [POST-AUTH] Authorized client {client_ip} hit cached {host}. Showing Success page.")
-                return HTMLResponse(content=f"""
-                    <html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-                    <title>Connected!</title>
-                    </head><body style="text-align:center; font-family:sans-serif; padding-top:20%; background:#e8f5e9;">
-                        <h1 style="color:#2e7d32;">SUCCESS!</h1>
-                        <p>Internet yako sasa iko tayari.</p>
-                        <p style="font-size:0.9em; color:#666;">Devices sometimes remember the login page for a few minutes.</p>
-                        <a href="http://www.google.com/?refresh={uuid.uuid4()}" style="display:inline-block; padding:15px 30px; background:#2e7d32; color:white; text-decoration:none; border-radius:5px; font-weight:bold;">TUMIA INTERNET</a>
-                        <script>setTimeout(()=>{{ window.location.href="http://www.google.com/?ref=hotzone"; }}, 3000);</script>
-                    </body></html>
-                """, status_code=200)
-                
-            return await call_next(request)
-
-        # 4. If NOT authorized, apply Captive Portal Hijack
-        logger.info(f"🔒 [UNAUTHORIZED] Hijacking {client_ip} ({host}{path})")
-        os_check_patterns = [
-            "gstatic.com", "google.com", "apple.com", "akamai", 
-            "msftconnecttest", "connectivitycheck", "clients3.google.com", 
-            "connectivity-check.ubuntu.com", "detectportal.firefox.com"
-        ]
-        is_os_probe = any(p in host for p in os_check_patterns)
-        
-        # 2. Aggressive Trigger Response
-        logger.info(f"🚩 Captive Portal TRIGGER: {host}{path} (Method: {request.method}, Client: {client_ip})")
-        
-        headers = {
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-            "Connection": "close"
-        }
-        
-        # For pure background "pings", return a high-priority 302 to the raw IP
-        if path in ["/generate_204", "/gen_204", "/hotspot-detect.html", "/ncsi.txt", "/connecttest.txt", "/success.txt"]:
-            return RedirectResponse(url=f"http://{server_ip}/", status_code=302, headers=headers)
-        
-        # 3. Interactive 'Wake-up' Page (The "Landing Site" Trick)
-        content = f"""
-        <!DOCTYPE html>
-        <html><head>
-        <meta http-equiv="refresh" content="0;url=http://{server_ip}/">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>WiFi Login</title>
-        </head><body style="background:#f0f2f5; font-family:sans-serif; text-align:center; padding-top:50px;">
-            <div style="background:white; padding:30px; border-radius:10px; display:inline-block; box-shadow:0 2px 10px rgba(0,0,0,0.1);">
-                <h2>HotZone WiFi</h2>
-                <p>Redirecting to login page...</p>
-                <a href="http://{server_ip}/" style="padding:12px 24px; background:#007bff; color:white; text-decoration:none; border-radius:5px; font-weight:bold;">Connect Now</a>
-            </div>
-            <script>window.location.href="http://{server_ip}/";</script>
-        </body></html>
-        """
-        return HTMLResponse(content=content, status_code=200, headers=headers)
-            
-        return await call_next(request)
-
-app.add_middleware(CaptivePortalMiddleware)
 
 # Serve static files (customer page)
 STATIC_DIR.mkdir(exist_ok=True)
@@ -478,63 +301,6 @@ async def serve_customer_page():
     # Fallback to a basic portal message if index.html is missing
     return HTMLResponse("<h1>Pata Voucher ya WiFi</h1><p>Tafadhali unganisha na WiFi kisha scan QR kulipia.</p>", status_code=200)
 
-# ---------------------------------------------------------------------------
-# OS Captive Portal Detection Routes
-# ---------------------------------------------------------------------------
-
-@app.get("/generate_204")
-@app.head("/generate_204")
-@app.get("/gen_204")
-@app.head("/gen_204")
-async def handle_android_check(request: Request):
-    """Handle Android/Chrome captive portal check."""
-    client_ip = request.client.host if request.client else "unknown"
-    logger.info(f"📱 [ANDROID] Captive portal check from {client_ip} - Redirecting to portal")
-    config = get_config()
-    server_ip = config.get("serverIp", "192.168.1.162")
-    headers = {
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache",
-        "Expires": "0"
-    }
-    # 🛡️ Android 14 Fix: Redirect to IP directly, avoiding second DNS lookup that can fail
-    portal_url = f"http://{server_ip}/"
-    return RedirectResponse(url=portal_url, status_code=302, headers=headers)
-
-@app.get("/hotspot-detect.html")
-async def handle_apple_check(request: Request):
-    """Handle Apple captive portal check (captive.apple.com)."""
-    client_ip = request.client.host if request.client else "unknown"
-    logger.info(f"🍎 [APPLE] Captive portal check from {client_ip} - Redirecting to portal")
-    config = get_config()
-    server_ip = config.get("serverIp", "192.168.1.162")
-    headers = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
-    return RedirectResponse(url=f"http://{server_ip}/", status_code=302, headers=headers)
-
-@app.get("/ncsi.txt")
-@app.head("/ncsi.txt")
-@app.get("/connecttest.txt")
-@app.head("/connecttest.txt")
-async def handle_windows_check(request: Request):
-    """Handle Windows connectivity checks."""
-    client_ip = request.client.host if request.client else "unknown"
-    logger.info(f"🪟 [WINDOWS] Captive portal check from {client_ip} - Redirecting to portal")
-    config = get_config()
-    server_ip = config.get("serverIp", "192.168.1.162")
-    headers = {"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
-    return RedirectResponse(url=f"http://{server_ip}/", status_code=302, headers=headers)
-
-@app.get("/success.html")
-async def handle_generic_check():
-    """Generic success page for some devices."""
-    return HTMLResponse("<TITLE>Success</TITLE><body>Connected</body>", status_code=200)
-
-# Additional Android detection endpoint
-@app.get("/gen_204")
-async def handle_gen_204(request: Request):
-    """Alternative Android detection endpoint."""
-    return await handle_android_check(request)
-
 @app.get("/admin", response_class=HTMLResponse)
 async def serve_admin_page():
     if ADMIN_PAGE_PATH.exists():
@@ -576,71 +342,77 @@ async def my_status(request: Request):
     client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
     if not client_ip:
         client_ip = request.client.host if request.client else ""
-        
-    res = await list_devices()
-    devices = res.get("devices", [])
-    for d in devices:
+    
+    # Try resolving MAC for this IP
+    mac = await _resolve_mac(client_ip)
+    if mac:
+        now = datetime.now()
+        for v in get_vouchers():
+            if v.get("mac", "").upper() == mac and v.get("status") == "active":
+                try:
+                    exp_dt = datetime.fromisoformat(v["expires"])
+                    if exp_dt > now:
+                        return {"active": True, "expires": v["expires"]}
+                except (ValueError, KeyError):
+                    pass
+        for w in get_whitelist():
+            if w["mac"].upper() == mac:
+                return {"active": True, "expires": None}
+    
+    # Fallback: check by IP in devices list
+    for d in get_devices_store():
         if d.get("ip") == client_ip and d.get("status") == "active":
             expires = d.get("expires")
             if expires:
                 try:
-                    exp_dt = datetime.fromisoformat(expires)
-                    if exp_dt > datetime.now():
+                    if datetime.fromisoformat(expires) > datetime.now():
                         return {"active": True, "expires": expires}
                 except ValueError:
                     pass
     return {"active": False}
 
 # ---------------------------------------------------------------------------
-# DNS-tracked devices (replaces constant router DHCP polling)
-# When a device makes a DNS query, we record its IP here.
-# The SmartDNS handler populates this dict.
+# IP→MAC mapping cache (populated from router or DB)
 # ---------------------------------------------------------------------------
-_dns_seen_devices = {}  # {ip: {"mac": "...", "last_seen": "...", "hostname": "..."}}
-_ip_auth_grace = {}     # {ip: (mac, timestamp)} - Grace period for MAC randomization
-_initial_scrape_done = True  # Always ready — no router scrape needed
+_ip_to_mac = {}
 
-def dns_track_device(client_ip, mac=None, hostname=None):
-    """Called by SmartDNS when a device makes a DNS query."""
-    now = datetime.now().isoformat()
-    if client_ip not in _dns_seen_devices:
-        _dns_seen_devices[client_ip] = {"ip": client_ip, "mac": mac or "", "hostname": hostname or "unknown", "first_seen": now}
-    entry = _dns_seen_devices[client_ip]
-    entry["last_seen"] = now
-    if mac:
-        entry["mac"] = mac
-        # Also ensure it's in the persistent devices_store (DB)
-        devices_store = get_devices_store()
-        updated = False
-        existing = None
-        for ds in devices_store:
-            if ds.get("mac", "").upper() == mac.upper():
-                existing = ds
-                break
-        
-        if existing:
-            if existing.get("ip") != client_ip or (hostname and existing.get("hostname") != hostname):
-                existing["ip"] = client_ip
-                if hostname and hostname != "unknown":
-                    existing["hostname"] = hostname
-                existing["last_seen"] = now
-                updated = True
-        else:
-            devices_store.append({
-                "mac": mac.upper(),
-                "hostname": hostname or "unknown",
-                "ip": client_ip,
-                "status": "unknown",
-                "first_seen": now,
-                "last_seen": now
-            })
-            updated = True
-            
-        if updated:
-            save_devices_store(devices_store)
-
-    if hostname and hostname != "unknown":
-        entry["hostname"] = hostname
+async def _resolve_mac(ip: str) -> str | None:
+    """Look up a client's MAC by IP from DB cache, ARP table, or router scrape."""
+    if ip in _ip_to_mac:
+        return _ip_to_mac[ip]
+    for ds in get_devices_store():
+        if ds.get("ip") == ip:
+            mac = ds.get("mac", "").upper()
+            if mac:
+                _ip_to_mac[ip] = mac
+                return mac
+    # ARP lookup fallback
+    try:
+        cmd = ["arp", "-a", ip] if platform.system() == "Windows" else ["arp", "-n", ip]
+        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout, _ = await proc.communicate()
+        out = stdout.decode(errors="ignore")
+        import re
+        match = re.search(r"([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})", out)
+        if match:
+            found_mac = match.group(0).replace("-", ":").upper()
+            _ip_to_mac[ip] = found_mac
+            logger.info(f"Resolved MAC via local ARP: {ip} -> {found_mac}")
+            return found_mac
+    except Exception:
+        pass
+    try:
+        devices = await scrape_devices()
+        for d in devices:
+            dmac = d.get("mac", "").upper()
+            dip = d.get("ip")
+            if dip:
+                _ip_to_mac[dip] = dmac
+                if dip == ip and dmac:
+                    return dmac
+    except Exception:
+        pass
+    return None
 
 @app.get("/api/devices")
 async def list_devices():
@@ -697,30 +469,7 @@ async def list_devices():
         if mac in wl_macs:
             entry["status"] = "whitelisted"
 
-        # Update IP from DNS tracking
-        for ip, dns_dev in _dns_seen_devices.items():
-            if dns_dev.get("mac", "").upper() == mac:
-                entry["ip"] = ip
-                break
-
         enriched.append(entry)
-
-    # 2. Add DNS-seen devices not yet in devices_store
-    for ip, dns_dev in _dns_seen_devices.items():
-        mac = dns_dev.get("mac", "").upper()
-        if mac and mac not in seen_macs:
-            seen_macs.add(mac)
-            entry = {
-                "mac": mac,
-                "host": dns_dev.get("hostname", "unknown"),
-                "ip": ip,
-                "status": "unknown"
-            }
-            if mac in nicknames:
-                entry["nickname"] = nicknames[mac]
-            if mac in wl_macs:
-                entry["status"] = "whitelisted"
-            enriched.append(entry)
 
     return {"loading": False, "devices": enriched}
 
@@ -1096,15 +845,11 @@ async def customer_analytics():
     vouchers = get_vouchers()
     devices_store = get_devices_store()
     
-    # Build hostname lookup from devices_store and _dns_seen_devices
+    # Build hostname lookup from devices_store
     hostname_map = {}
     for ds in devices_store:
         mac = ds.get("mac", "").upper()
         hostname_map[mac] = ds.get("hostname", "")
-    for ip, dns_dev in _dns_seen_devices.items():
-        mac = dns_dev.get("mac", "").upper()
-        if mac not in hostname_map or not hostname_map[mac]:
-            hostname_map[mac] = dns_dev.get("hostname", "")
     
     # Only count paid vouchers (amount > 0, exclude manual bypass)
     paid = [v for v in vouchers if v.get("amount", 0) > 0 and v.get("status") in ("active", "expired")]
@@ -1354,44 +1099,22 @@ async def redeem_voucher_code(req: RedeemRequest, request: Request):
         raise HTTPException(status_code=404, detail="Invalid voucher code.")
 
     if target_code.get("status") != "unused":
-        # 🛡️ Voucher Repair: If already used, check if this user has the matching session cookie
-        session_cookie = request.cookies.get("hotzone_session")
-        if session_cookie:
-            dns_server = getattr(request.app.state, "dns_server", None)
-            if dns_server:
-                res = dns_server.sync_from_cookie(session_cookie, client_ip)
-                if res:
-                    logger.info(f"✨ [REPAIR] Session restored for {client_ip} using already-used code {code_str}")
-                    return {"status": "success", "message": "Session restored! You are now connected."}
-
         raise HTTPException(status_code=400, detail="This voucher code has already been used.")
 
     client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
     if not client_ip:
         client_ip = request.client.host if request.client else "unknown"
 
-    mac = None
-    hostname = "unknown"
-    
-    # Try to find device in SmartDNS tracker
-    dns_dev = _dns_seen_devices.get(client_ip)
-    if dns_dev and dns_dev.get("mac"):
-        mac = dns_dev.get("mac").upper()
-        hostname = dns_dev.get("hostname", "unknown")
-    
-    if not mac:
-        # Fallback to persistent local storage
-        devices_store = get_devices_store()
-        for ds in devices_store:
-            if ds.get("ip") == client_ip:
-                mac = ds.get("mac", "").upper()
-                hostname = ds.get("hostname", "unknown")
-                break
-                
+    mac = await _resolve_mac(client_ip)
     if not mac:
         logger.error(f"Redeem failed: No MAC found for IP {client_ip}")
-
         raise HTTPException(status_code=400, detail="Could not identify your device. Please ensure you are connected directly to the WiFi.")
+    
+    hostname = "unknown"
+    for ds in get_devices_store():
+        if ds.get("mac", "").upper() == mac:
+            hostname = ds.get("hostname", "unknown")
+            break
     
     # Check if already whitelisted
     whitelist = get_whitelist()
@@ -1479,9 +1202,6 @@ async def redeem_voucher_code(req: RedeemRequest, request: Request):
 
     logger.info(f"Voucher code {code_str} redeemed successfully by MAC {mac}")
     
-    # 🛡️ Track Authorization Grace (Anti-MAC Randomization)
-    _ip_auth_grace[client_ip] = (mac, datetime.now())
-    
     response = JSONResponse({"status": "success", "voucher": session_voucher})
     # Set the identity mirror cookie (expires in 30 days)
     # We sign it with a simple hash for verification
@@ -1491,6 +1211,254 @@ async def redeem_voucher_code(req: RedeemRequest, request: Request):
     response.set_cookie(key="hotzone_session", value=token, max_age=30*24*3600, httponly=True)
     
     return response
+
+# ---------------------------------------------------------------------------
+# DnsBlocker — lightweight DNS gatekeeper (no captive portal)
+# Blocks DNS for unauthorized devices so they can't reach the internet
+# Authorized devices get real DNS proxy to 8.8.8.8
+# ---------------------------------------------------------------------------
+
+class DnsBlocker:
+    def __init__(self):
+        self.running = False
+        self.sock = None
+
+    def start(self):
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.sock.bind(("0.0.0.0", 53))
+            self.sock.settimeout(1.0)
+            self.running = True
+            logger.info("📡 DNS Blocker listening on port 53")
+            threading.Thread(target=self._loop, daemon=True).start()
+        except PermissionError:
+            logger.error("❌ Port 53 requires sudo/admin. DNS blocking disabled.")
+        except Exception as e:
+            logger.error(f"❌ DNS Blocker error: {e}")
+
+    def _loop(self):
+        while self.running:
+            try:
+                data, addr = self.sock.recvfrom(512)
+                self._handle(data, addr)
+            except socket.timeout:
+                continue
+            except Exception:
+                pass
+
+    def _handle(self, data, addr):
+        client_ip = addr[0]
+        try:
+            request = DNSRecord.parse(data)
+            qname = str(request.q.qname).lower().rstrip('.')
+            qtype = request.q.qtype
+
+            is_auth = self._is_authorized(client_ip)
+
+            if is_auth:
+                # Proxy to upstream DNS
+                try:
+                    psock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    psock.settimeout(3.0)
+                    psock.sendto(data, ("8.8.8.8", 53))
+                    resp_data, _ = psock.recvfrom(2048)
+                    self.sock.sendto(resp_data, addr)
+                    psock.close()
+                except Exception:
+                    pass
+            else:
+                # Block — return our server IP for all A queries so users land on portal
+                if qtype == QTYPE.A:
+                    reply = request.reply()
+                    config = get_config()
+                    server_ip = config.get("serverIp", "192.168.1.162")
+                    reply.add_answer(RR(qname + ".", QTYPE.A, rdata=A(server_ip), ttl=60))
+                    self.sock.sendto(reply.pack(), addr)
+        except Exception:
+            pass
+
+    def _is_authorized(self, ip):
+        if ip in ("127.0.0.1", "::1"):
+            return True
+        config = get_config()
+        if ip == config.get("serverIp", ""):
+            return True
+        mac = _ip_to_mac.get(ip)
+        if not mac:
+            return False
+        mac = mac.upper()
+        now = datetime.now()
+        for w in get_whitelist():
+            if w["mac"].upper() == mac:
+                return True
+        for v in get_vouchers():
+            if v.get("mac", "").upper() == mac and v.get("status") == "active":
+                try:
+                    if datetime.fromisoformat(v["expires"]) > now:
+                        return True
+                except Exception:
+                    pass
+        return False
+
+    def stop(self):
+        self.running = False
+        if self.sock:
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+
+_dns_blocker = DnsBlocker()
+
+# ---------------------------------------------------------------------------
+# pf (macOS) DNS port redirection — forces all DNS traffic through blocker
+# ---------------------------------------------------------------------------
+
+def _get_primary_iface():
+    try:
+        r = subprocess.run(["route", "-n", "get", "default"], capture_output=True, text=True)
+        for line in r.stdout.splitlines():
+            if "interface:" in line:
+                return line.split(":")[1].strip()
+    except Exception:
+        pass
+    return "en0"
+
+def _get_server_mac():
+    try:
+        mac_num = uuid.getnode()
+        mac_str = ':'.join(("%012X" % mac_num)[i:i+2] for i in range(0, 12, 2))
+        return mac_str.upper()
+    except Exception:
+        return ""
+
+def _add_pf_dns_redirect():
+    if platform.system() != "Darwin":
+        return False
+    iface = _get_primary_iface()
+    rule = (
+        f"rdr pass on {iface} inet proto udp from any to any port 53 -> 127.0.0.1 port 53\n"
+        f"rdr pass on {iface} inet proto tcp from any to any port 80 -> 127.0.0.1 port 8000\n"
+    )
+    try:
+        default_conf = "/etc/pf.conf"
+        pf_rules = ""
+        if os.path.exists(default_conf):
+            with open(default_conf) as f:
+                pf_rules = f.read()
+        lines = pf_rules.splitlines()
+        lines = [l for l in lines if "hotzone.hotspot" not in l]
+        pf_rules = "\n".join(lines).strip()
+        pf_rules += f"\nrdr-anchor \"com.hotzone.hotspot\"\n"
+        r = subprocess.run(["pfctl", "-ef", "-"], input=pf_rules, text=True, capture_output=True)
+        if r.returncode != 0:
+            logger.warning(f"⚠️ pf base load: {r.stderr.strip()}")
+        r2 = subprocess.run(["pfctl", "-a", "com.hotzone.hotspot", "-f", "-"], input=rule, text=True, capture_output=True)
+        if r2.returncode == 0:
+            logger.info(f"📡 pf redirect active on {iface}: UDP 53->53, TCP 80->8000")
+            return True
+        else:
+            logger.warning(f"⚠️ pf anchor load failed: {r2.stderr.strip()}")
+            return False
+    except Exception as e:
+        logger.warning(f"⚠️ pf redirect failed: {e}")
+        return False
+
+def _remove_pf_dns_redirect():
+    if platform.system() != "Darwin":
+        return
+    try:
+        subprocess.run(["pfctl", "-a", "com.hotzone.hotspot", "-F", "all"], capture_output=True)
+        default_conf = "/etc/pf.conf"
+        if os.path.exists(default_conf):
+            subprocess.run(["pfctl", "-f", default_conf], capture_output=True)
+        logger.info("📡 pf redirect removed")
+    except Exception as e:
+        logger.warning(f"⚠️ pf restore failed: {e}")
+
+# ---------------------------------------------------------------------------
+# System Control — Washa System
+# ---------------------------------------------------------------------------
+
+@app.post("/api/system/start")
+async def system_start():
+    """Sync whitelist to router and enforce MAC filtering."""
+    try:
+        whitelist = get_whitelist()
+        vouchers = get_vouchers()
+        now = datetime.now()
+        active_macs = {w["mac"].upper() for w in whitelist}
+        
+        # Always include Server PC's MAC address
+        srv_mac = _get_server_mac()
+        if srv_mac:
+            active_macs.add(srv_mac)
+
+        for v in vouchers:
+            if v.get("status") == "active":
+                try:
+                    if datetime.fromisoformat(v["expires"]) > now:
+                        active_macs.add(v["mac"].upper())
+                except Exception:
+                    pass
+        allowed_list = [{"mac": mac} for mac in active_macs]
+        if active_macs:
+            ok = await sync_whitelist_to_router(allowed_list)
+            if ok:
+                await purge_unauthorized_macs(active_macs)
+        else:
+            # Always enforce whitelist mode even when empty (blocks ALL until admin adds own MAC)
+            ok = await sync_whitelist_to_router([])
+            logger.warning("⚠️ Whitelist iko tupu — hakuna MAC iliyoruhusiwa. Ongeza MAC yako kwenye whitelist kwanza!")
+        # Set router DHCP to use this server as DNS (so DNS blocker intercepts all queries)
+        config = get_config()
+        server_ip = config.get("serverIp", "192.168.1.162")
+        await set_dhcp_dns(server_ip)
+        # macOS pf redirect: force all network DNS traffic through our blocker
+        _add_pf_dns_redirect()
+        global _enforcer_task
+        if not _enforcer_task or _enforcer_task.done():
+            _enforcer_task = asyncio.create_task(expiry_enforcer())
+            logger.info("✅ Expiry enforcer started")
+        # Start DNS blocker if not already running
+        if not _dns_blocker.running:
+            _dns_blocker.start()
+        return {"status": "ok" if ok else "error", "allowed_count": len(active_macs), "whitelist_empty": len(active_macs) == 0}
+    except Exception as e:
+        logger.error(f"System start failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/system/stop")
+async def system_stop():
+    """Stop enforcement — cancels expiry enforcer, disables router whitelist mode, and stops DNS blocker."""
+    global _enforcer_task
+    if _enforcer_task and not _enforcer_task.done():
+        _enforcer_task.cancel()
+        _enforcer_task = None
+        logger.info("⛔ Expiry enforcer stopped")
+    if _dns_blocker.running:
+        _dns_blocker.stop()
+        logger.info("⛔ DNS blocker stopped")
+    # Remove pf redirect
+    _remove_pf_dns_redirect()
+    # Restore router to Allow-All mode
+    await disable_whitelist_mode()
+    return {"status": "stopped"}
+
+@app.get("/api/system/status")
+async def system_status():
+    """Check if router is reachable and whitelist is active."""
+    try:
+        from router_scraper import scrape_devices
+        devices = await scrape_devices()
+        router_ok = len(devices) > 0
+        return {
+            "router_connected": router_ok,
+            "device_count": len(devices)
+        }
+    except Exception as e:
+        return {"router_connected": False, "device_count": 0, "error": str(e)}
 
 # ---------------------------------------------------------------------------
 # WebSocket
@@ -1519,8 +1487,6 @@ async def ws_endpoint(websocket: WebSocket):
 # ---------------------------------------------------------------------------
 # Background task — expiry enforcer (DB-driven, independent of scrape)
 # ---------------------------------------------------------------------------
-_LAST_HARDWARE_AUDIT = 0 
-
 async def expiry_enforcer():
     """
     Every 30s: read vouchers directly from DB and enforce expiry on the router.
@@ -1588,7 +1554,6 @@ async def expiry_enforcer():
                     logger.warning(f"Cutoff check error: {e}")
 
             # ── Normal per-voucher expiry ──
-            current_active_macs = set()
             for v in vouchers:
                 if v.get("status") not in ("active", "expired"):
                     continue
@@ -1618,46 +1583,11 @@ async def expiry_enforcer():
                                 break
                         save_devices_store(devices_store)
                 elif v["status"] == "active":
-                    # If active, ensure it's physically unblocked on router hardware
                     v_mac = v["mac"].upper()
                     verified_active_macs.add(v_mac)
-                    current_active_macs.add(v_mac)
-
-            # 🛡️ REFRESH HIGH-SPEED CACHE
-            global _AUTH_CACHE, _WL_CACHE
-            _AUTH_CACHE = current_active_macs
-            _WL_CACHE = {w["mac"].upper() for w in get_whitelist()}
 
             if changed:
                 save_vouchers(vouchers)
-            
-            # --- Proactive Hardware Verification ---
-            # 🛡️ Audit hardware sparingly (every 5 minutes) to protect router memory
-            global _LAST_HARDWARE_AUDIT
-            if MAIN_LOOP and (time.time() - _LAST_HARDWARE_AUDIT) > 300:
-                _LAST_HARDWARE_AUDIT = time.time()
-                async def _verify_hardware():
-                    try:
-                        # Fetch what the router ACTUALLY thinks is allowed
-                        hardware_devices = await scrape_devices()
-                        router_allowed = {d["mac"].upper() for d in hardware_devices if d.get("router_allowed")}
-                        
-                        # 1. Verify Active devices are unblocked
-                        for mac in verified_active_macs:
-                            if mac not in router_allowed:
-                                logger.warning(f"🚨 [HARDWARE DESYNC] {mac} is ACTIVE in server but BLOCKED in router hardware! FORCING ACCESS...")
-                                await unblock_device(mac)
-                        
-                        # 2. Verify Blocked devices are NOT allowed
-                        for mac in router_allowed:
-                            if mac not in verified_active_macs:
-                                logger.warning(f"🚨 [HARDWARE DESYNC] {mac} is BLOCKED in server but ALLOWED in router hardware! FORCING BLOCK...")
-                                await block_device(mac)
-                                
-                    except Exception as e:
-                        logger.error(f"Hardware sync check failed: {e}")
-
-                asyncio.run_coroutine_threadsafe(_verify_hardware(), MAIN_LOOP)
 
         except Exception as e:
             logger.error(f"Expiry enforcer error: {e}")
@@ -1666,485 +1596,23 @@ async def expiry_enforcer():
         await asyncio.sleep(60) 
 
 
-# ---------------------------------------------------------------------------
-# device_monitor REMOVED — DNS is the gatekeeper now.
-# Router API is ONLY called when blocking/unblocking a device.
-# The expiry_enforcer (above) handles expired vouchers.
-# ---------------------------------------------------------------------------
-
-
 
 # ---------------------------------------------------------------------------
-# SmartDNS Hijacker
+# Catch-all — serve portal for any unknown domain (from DNS redirect)
 # ---------------------------------------------------------------------------
 
-class SmartDNS:
-    def __init__(self, listen_ip="0.0.0.0", port=53, upstream="8.8.8.8"):
-        self.listen_ip = listen_ip
-        self.port = port
-        self.upstream = upstream
-        self.running = False
-        self.udp_sock = None
-        self.tcp_sock = None
-        self.proxy_sock = None
-        self._executor = None
-
-    def start(self):
-        try:
-            from concurrent.futures import ThreadPoolExecutor
-            self._executor = ThreadPoolExecutor(max_workers=30)
-            
-            # 1. UDP Handler
-            self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.udp_sock.bind((self.listen_ip, self.port))
-            self.udp_sock.settimeout(1.0)
-            
-            # 2. TCP Handler (Critical for modern OS reliability)
-            self.tcp_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.tcp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.tcp_sock.bind((self.listen_ip, self.port))
-            self.tcp_sock.listen(5)
-            self.tcp_sock.settimeout(1.0)
-            
-            # 3. Proxy Handler
-            self.proxy_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.proxy_sock.settimeout(1.0) # Faster timeout for mobile responsiveness
-
-            self.running = True
-            logger.info(f"📡 SmartDNS Hijacker listening (UDP & TCP) on {self.listen_ip}:{self.port}")
-            
-            # Start the main UDP loop in a thread
-            threading.Thread(target=self._udp_loop, daemon=True).start()
-            # Start the main TCP loop in a thread
-            threading.Thread(target=self._dns_tcp_loop, daemon=True).start()
-            # Start the proactive maintenance loop (MAC Discovery Pulse)
-            threading.Thread(target=self._maintenance_loop, daemon=True).start()
-            
-        except PermissionError:
-            logger.error("❌ DNS Permission Error: Port 53 requires sudo privileges.")
-        except Exception as e:
-            import traceback
-            logger.error(f"❌ DNS Start Error: {e}")
-            logger.error(traceback.format_exc())
-
-    def _udp_loop(self):
-        while self.running:
-            try:
-                data, addr = self.udp_sock.recvfrom(512)
-                if self._executor:
-                    self._executor.submit(self.handle_query, data, addr, proto="udp")
-            except socket.timeout: continue
-            except Exception as e:
-                if self.running: logger.debug(f"UDP Error: {e}")
-
-    def _dns_tcp_loop(self):
-        """Dedicated loop for DNS-over-TCP requests."""
-        while self.running:
-            try:
-                conn, addr = self.tcp_sock.accept()
-                if self._executor:
-                    self._executor.submit(self.handle_tcp_conn, conn, addr)
-            except socket.timeout: continue
-            except Exception as e:
-                if self.running: logger.debug(f"TCP Error: {e}")
-
-    def _maintenance_loop(self):
-        """Proactively refreshes the device table from the router to catch identities early."""
-        while self.running:
-            try:
-                # Every 5 minutes (300s), trigger a global device discovery pulse
-                if MAIN_LOOP:
-                    asyncio.run_coroutine_threadsafe(self._refresh_all_macs(), MAIN_LOOP)
-            except Exception: pass
-            time.sleep(300) 
-
-    async def _refresh_all_macs(self):
-        """High-level wrapper to refresh all IP mappings."""
-        try:
-            # We use an arbitrary IP to trigger the global scrape within the existing method
-            await self._resolve_mac_from_router("0.0.0.0", silent=True)
-        except: pass
-
-    def handle_tcp_conn(self, conn, addr):
-        try:
-            conn.settimeout(2.0)
-            data = conn.recv(1024)
-            if len(data) > 2:
-                # DNS over TCP sends 2 bytes length first
-                query_data = data[2:]
-                response = self.handle_query(query_data, addr, proto="tcp", return_only=True)
-                if response:
-                    # Prepend length for TCP
-                    length = len(response)
-                    conn.sendall(length.to_bytes(2, byteorder='big') + response)
-        except Exception as e:
-            logger.debug(f"TCP session error ({addr[0]}): {e}")
-        finally:
-            conn.close()
-
-    def stop(self):
-        self.running = False
-        if self._executor:
-            self._executor.shutdown(wait=False)
-        if self.sock:
-            self.sock.close()
-        if self.proxy_sock:
-            self.proxy_sock.close()
-
-    def handle_query(self, data, addr, proto="udp", return_only=False):
-        """Handle incoming DNS queries."""
-        client_ip = addr[0]
-        try:
-            if len(data) < 12: return None
-            
-            request = DNSRecord.parse(data)
-            qname = str(request.q.qname).lower().rstrip('.')
-            qtype = request.q.qtype
-            
-            # Deep Log
-            if qtype == QTYPE.A:
-                logger.debug(f"🔍 DNS ({proto.upper()}): {client_ip} -> {qname}")
-            
-            # Check if this IP is actually whitelisted/voucher-active
-            is_authorized = self.is_mac_authorized(client_ip)
-            
-            # Special case: Don't hijack the server itself if checking for updates/etc.
-            # but allow hijacking for testing if it's localhost
-            if client_ip == "127.0.0.1":
-                is_authorized = False # Force hijack locally to test the portal
-
-            if is_authorized:
-                # 🚀 Nuclear Triple DNS: Try multiple providers simultaneously
-                try:
-                    if qtype == QTYPE.AAAA:
-                        reply = request.reply()
-                        reply.header.rcode = 3 # NXDOMAIN
-                    else:
-                        proxy_data = self._query_upstream_nuclear(data)
-                        if proxy_data:
-                            reply = DNSRecord.parse(proxy_data)
-                        else:
-                            # Fallback if all fail
-                            reply = request.reply()
-                            reply.header.rcode = 2 # SERVFAIL
-                except Exception as e:
-                    logger.warning(f"DNS Nuclear Failure for {qname}: {e}")
-                    reply = request.reply()
-            else:
-                # Hijack to Local IP
-                config = get_config()
-                server_ip = config.get("serverIp", "192.168.1.162")
-                portal_domain = "hotzone.portal"
-                
-                reply = request.reply()
-                # 🛡️ Fix for Android 14/15: Set RA/AA flags so OS trusts our hijacked response
-                reply.header.ra = 1 
-                reply.header.aa = 1
-                
-                if qtype == QTYPE.A:
-                    # Point BOTH the original query AND our local portal domain to our IP
-                    reply.add_answer(RR(qname + ".", QTYPE.A, rdata=A(server_ip), ttl=1))
-                    if qname != portal_domain:
-                        logger.info(f"🛡️ DNS Hijacked: {client_ip} -> {qname} redirected to {server_ip}")
-                elif qtype == QTYPE.AAAA:
-                    # Returning NXDOMAIN forces the device to use the Hijacked A record (IPv4)
-                    # This is CRITICAL for Android 14/15
-                    reply.header.rcode = 3 # NXDOMAIN
-            
-            # Send response for BOTH authorized and unauthorized users
-            if self.udp_sock and proto == "udp" and reply:
-                self.udp_sock.sendto(reply.pack(), addr)
-            
-            if return_only and reply:
-                return reply.pack()
-            return None
-
-        except Exception as e:
-            # Log full traceback if it's a critical error
-            if "DNSRecord" in str(e):
-                logger.debug(f"DNS Parsing Noise from {client_ip}")
-            else:
-                logger.error(f"DNS Query Handling Error ({client_ip}): {e}")
-
-    def _get_local_ip(self):
-        """Helper to find the best local IP if not configured."""
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            # Doesn't need to actually connect
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return ip
-        except Exception:
-            return "127.0.0.1"
-
-    # Cache for mapping IP to MAC on discovery
-    _ip_to_mac_lookup = {}
-    _pending_lookups = set()
-
-    def is_mac_authorized(self, client_ip):
-        """Check if the client IP belongs to an authorized MAC using Cache + DB."""
-        # Whitelist the server itself to prevent it from hijacking its own internet/monitoring
-        config = get_config()
-        server_ip = config.get("serverIp", "")
-        local_ip = self._get_local_ip()
-
-        if client_ip in (server_ip, local_ip, "127.0.0.1") and client_ip:
-            if client_ip == "127.0.0.1":
-                return False
-            logger.debug(f"✅ DNS Auth: Server itself ({client_ip}) authorized.")
-            return True
-
-        logger.debug(f"🔍 [DNS AUTH] Checking authorization for {client_ip}")
-
-        # 🛡️ Identity Mirror & Grace Period
-        grace = _ip_auth_grace.get(client_ip)
-        if grace:
-            auth_mac, ts = grace
-            # If in 5 min grace window
-            if (datetime.now() - ts).total_seconds() < 300: 
-                # PROACTIVE: If we haven't resolved this IP's MAC in the last 20s, trigger refresh
-                now_ts = time.time()
-                last_call = _discovery_cooldown.get(client_ip, 0)
-                if (now_ts - last_call) > 20 and client_ip not in self._pending_lookups and MAIN_LOOP:
-                    _discovery_cooldown[client_ip] = now_ts
-                    self._pending_lookups.add(client_ip)
-                    asyncio.run_coroutine_threadsafe(self._resolve_mac_from_router(client_ip), MAIN_LOOP)
-
-                # Check if current (possibly newly resolved) MAC differs from redemption MAC
-                current_mac = self._ip_to_mac_lookup.get(client_ip)
-                if current_mac and current_mac.upper() != auth_mac.upper():
-                    new_mac = current_mac.upper()
-                    logger.info(f"🔄 [MIRROR] MAC Switch detected on {client_ip}! {auth_mac} -> {new_mac}")
-                    
-                    vouchers = get_vouchers()
-                    source_v = next((v for v in vouchers if v["mac"].upper() == auth_mac.upper() and v["status"] == "active"), None)
-                    if source_v:
-                        self._sync_voucher_to_new_identity(source_v, new_mac, client_ip)
-                    else:
-                        # Ensure new identity is enabled on router anyway
-                        asyncio.run_coroutine_threadsafe(unblock_device(new_mac), MAIN_LOOP)
-
-                return True
-            else:
-                try: del _ip_auth_grace[client_ip]
-                except: pass
-
-        # Step 1: Check Local Cache for MAC
-        mac = self._ip_to_mac_lookup.get(client_ip)
-        
-        if not mac:
-            # Check devices_store (DB) for a previous mapping
-            for ds in get_devices_store():
-                if ds.get("ip") == client_ip:
-                    mac = ds.get("mac", "").upper()
-                    self._ip_to_mac_lookup[client_ip] = mac
-                    break
-        
-        if not mac:
-            # UNKNOWN IP: Trigger background router API call with 30s cooldown
-            now_ts = time.time()
-            last_call = _discovery_cooldown.get(client_ip, 0)
-            if (now_ts - last_call) > 30 and client_ip not in self._pending_lookups and MAIN_LOOP:
-                _discovery_cooldown[client_ip] = now_ts
-                logger.debug(f"🔍 DNS Auth: No MAC for {client_ip}, triggering discovery...")
-                self._pending_lookups.add(client_ip)
-                asyncio.run_coroutine_threadsafe(self._resolve_mac_from_router(client_ip), MAIN_LOOP)
-            
-            # Hijack immediately (safe default) while we resolve the MAC
-            return False
-
-        mac = mac.upper()
-        
-        # Track this device for the Admin UI
-        dns_track_device(client_ip, mac=mac)
-
-        # ⚡ HIGH SPEED MEMORY CHECK (Minimal Latency)
-        if mac in _WL_CACHE:
-            logger.debug(f"✅ DNS Auth (CACHE): MAC {mac} is whitelisted.")
-            return True
-        if mac in _AUTH_CACHE:
-            logger.debug(f"✅ DNS Auth (CACHE): MAC {mac} has active voucher.")
-            return True
-
-        logger.info(f"🚫 [DNS AUTH] Device {client_ip} (MAC: {mac}) is NOT authorized - WILL HIJACK")
-        return False
-
-    async def _resolve_mac_from_router(self, client_ip, silent=False):
-        """Calls the router API ONCE to find the MAC for a new IP discovery."""
-        try:
-            if not silent:
-                logger.debug(f"🔍 Discovery: Calling router API to map IP {client_ip} to MAC...")
-            devices = await scrape_devices()
-            found_mac = None
-            for d in devices:
-                dev_ip = d.get("ip")
-                dev_mac = d.get("mac", "").upper()
-                if dev_mac:
-                    # Cache all mappings found to save future calls
-                    self._ip_to_mac_lookup[dev_ip] = dev_mac
-                    if dev_ip == client_ip:
-                        found_mac = dev_mac
-            
-            if not silent and found_mac:
-                logger.debug(f"✅ Discovery: IP {client_ip} is MAC {found_mac}")
-                dns_track_device(client_ip, mac=found_mac)
-            elif not silent:
-                logger.debug(f"⚠️ Discovery: Router didn't list a MAC for IP {client_ip}")
-                
-        except Exception as e:
-            logger.debug(f"Discovery failed for {client_ip}: {e}")
-        finally:
-            if client_ip in self._pending_lookups:
-                self._pending_lookups.remove(client_ip)
-
-    def sync_from_cookie(self, cookie_val, ip):
-        """Verifies session cookie and mirrors voucher to the current client identity."""
-        try:
-            parts = cookie_val.split(":")
-            if len(parts) != 3: return None
-            vid, old_mac, signature = parts
-            
-            config = get_config()
-            secret = config.get("adminPin", "2004")
-            expected = hashlib.sha256((vid + old_mac + secret).encode()).hexdigest()[:16]
-            
-            if signature != expected:
-                return None
-                
-            # Verify the voucher is still active in DB
-            now = datetime.now()
-            vouchers = get_vouchers()
-            source_v = next((v for v in vouchers if v["id"] == vid and v["status"] == "active"), None)
-            
-            if not source_v:
-                return None
-                
-            if datetime.fromisoformat(source_v["expires"]) <= now:
-                return None
-                
-            # We have a valid active session! Find current MAC for this IP
-            # We might need to force a router refresh if the MAC is unknown
-            current_mac = self._ip_to_mac_lookup.get(ip)
-            if not current_mac:
-                # Non-blocking refresh - results will be available on next request or DNS query
-                if ip not in self._pending_lookups and MAIN_LOOP:
-                    self._pending_lookups.add(ip)
-                    asyncio.run_coroutine_threadsafe(self._resolve_mac_from_router(ip), MAIN_LOOP)
-                return None # Try again on next poll
-                
-            if current_mac.upper() != old_mac.upper():
-                # MIRROR TRIGGERED
-                self._sync_voucher_to_new_identity(source_v, current_mac, ip)
-                return current_mac.upper()
-                
-            return old_mac.upper() # Already synced
-        except Exception as e:
-            logger.error(f"Cookie sync error: {e}")
-            return None
-
-    def _query_upstream_nuclear(self, data):
-        """Simultaneously query multiple DNS providers and return the fastest response."""
-        dnsservers = ["8.8.8.8", "1.1.1.1", "8.8.4.4", "1.0.0.1"]
-        results = []
-        lock = threading.Lock()
-        stop_event = threading.Event()
-
-        def worker(server):
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(2.5)
-            try:
-                sock.sendto(data, (server, 53))
-                resp, _ = sock.recvfrom(2048)
-                with lock:
-                    if not stop_event.is_set():
-                        results.append(resp)
-                        stop_event.set()
-            except:
-                pass
-            finally:
-                sock.close()
-
-        threads = []
-        for s in dnsservers:
-            t = threading.Thread(target=worker, args=(s,), daemon=True)
-            threads.append(t)
-            t.start()
-        
-        # Wait up to 2.5 seconds for the first winner
-        stop_event.wait(2.5)
-        return results[0] if results else None
-
-    def _sync_voucher_to_new_identity(self, source_v, new_mac, ip):
-        """Copies authorization from an old identity to a new one (MAC Randomization sync)."""
-        new_mac = new_mac.upper()
-        vouchers = get_vouchers()
-        
-        # Avoid duplicate syncs
-        if any(v["mac"].upper() == new_mac and v["status"] == "active" for v in vouchers):
-            return
-
-        logger.info(f"🧬 [IDENTITY SYNC] Mirroring session {source_v['id']} to new MAC {new_mac}")
-        
-        new_v = source_v.copy()
-        new_v["id"] = str(uuid.uuid4())[:8]
-        new_v["mac"] = new_mac
-        new_v["reference"] = f"SYNC-{source_v['id']}"
-        
-        vouchers.append(new_v)
-        save_vouchers(vouchers)
-        
-        # Instantly unblock on router
-        if MAIN_LOOP:
-            asyncio.run_coroutine_threadsafe(unblock_device(new_mac), MAIN_LOOP)
-            
-        # Update device store status
-        devices_store = get_devices_store()
-        updated = False
-        for ds in devices_store:
-            if ds.get("mac", "").upper() == new_mac:
-                ds["status"] = "active"
-                ds["voucher_id"] = new_v["id"]
-                ds["expires"] = new_v["expires"]
-                updated = True
-                break
-        if not updated:
-            devices_store.append({
-                "mac": new_mac,
-                "hostname": "Randomized Device",
-                "ip": ip,
-                "status": "active",
-                "voucher_id": new_v["id"],
-                "expires": new_v["expires"]
-            })
-        save_devices_store(devices_store)
-        
-        # Notify UI
-        asyncio.run_coroutine_threadsafe(
-            ws_manager.broadcast({"type": "device_unblocked", "mac": new_mac, "is_sync": True}), 
-            MAIN_LOOP
-        )
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Catch-all hijacked route (MUST BE LAST)
-# ---------------------------------------------------------------------------
-
-@app.api_route("/{path_name:path}", methods=["GET", "POST", "HEAD", "OPTIONS", "PUT", "PATCH", "DELETE"])
-async def catch_all(request: Request, path_name: str):
-    # If it's an API call or internal path, don't hijack
+@app.api_route("/{path_name:path}", methods=["GET", "HEAD"])
+async def catch_all_portal(request: Request, path_name: str):
     if path_name.startswith(("api/", "static/", "ws", "admin")):
-        # We don't want to redirect valid internal API / websocket / admin requests
         raise HTTPException(status_code=404)
-    
-    # Check if authorized - if so, this shouldn't have hit our server (dns would proxied it)
-    # But if it did, redirect to a useful starting point
-    logger.info(f"🚩 Global Hijack: Redirecting {request.client.host if request.client else 'unknown'} path '{path_name}' to portal.")
-    config = get_config()
-    server_ip = config.get("serverIp", "192.168.1.162")
-    return RedirectResponse(url=f"http://{server_ip}/", status_code=302)
+    index = STATIC_DIR / "index.html"
+    if index.exists():
+        return FileResponse(str(index))
+    return HTMLResponse("<h1>HotZone WiFi</h1><p>Ingiza voucher code yako.</p>")
+
+# ---------------------------------------------------------------------------
+# Main Entry
+# ---------------------------------------------------------------------------
 
 
 if __name__ == "__main__":
@@ -2171,7 +1639,6 @@ if __name__ == "__main__":
 
     # 3. Start Web Portal (HTTP-only) on Port 80
     logger.info("🚀 Starting Web Portal...")
-    start_dummy_https_server()
     try:
         threading.Thread(target=_open_admin, args=(80,), daemon=True).start()
         uvicorn.run(app, host="0.0.0.0", port=80, log_level="info", reload=False)

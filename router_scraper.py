@@ -382,9 +382,11 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
 
             if changed:
                 await client.post("/cgi-bin/http.cgi", json={"cmd": 23, "method": "POST", "language": "en", "sessionId": _session_id, "datas": rules, "token": token})
-                await client.post("/cgi-bin/http.cgi", json={"cmd": 20, "method": "POST", "language": "en", "sessionId": _session_id, "token": token})
-                logger.info("API sync completed whitelist enforcement ✅")
+                logger.info("API sync updated whitelist MAC entries ✅")
                 
+            # Always execute CMD 20 (Apply rules) to commit Whitelist Mode on router hardware
+            await client.post("/cgi-bin/http.cgi", json={"cmd": 20, "method": "POST", "language": "en", "sessionId": _session_id, "token": token})
+            logger.info("API sync completed whitelist enforcement (CMD 20 applied) ✅")
             return True
 
         except Exception as e:
@@ -432,3 +434,104 @@ async def cleanup():
     if _client:
         await _client.aclose()
         _client = None
+
+async def disable_whitelist_mode() -> bool:
+    """Set router to allow-all mode (acceptAll: true) — no device gets blocked.
+    Call this on server startup to ensure the router isn't stuck in whitelist mode
+    from a previous session."""
+    global _session_id
+    config = _load_config()
+    router_ip = config.get("routerIp", "192.168.1.1")
+    client = get_client(router_ip)
+    async with _lock:
+        try:
+            await _ensure_logged_in(client, config)
+            for mode_cmd in [28, 30]:
+                mode_res = await client.post("/cgi-bin/http.cgi", json={"cmd": mode_cmd, "method": "GET", "language": "en", "sessionId": _session_id})
+                mode_data = mode_res.json()
+                if "datas" in mode_data:
+                    token = mode_data.get("token")
+                    rules = mode_data["datas"]
+                    changed = False
+                    for r in rules:
+                        if r.get("acceptAll") is not True:
+                            r["acceptAll"] = True
+                            changed = True
+                    if changed:
+                        await client.post("/cgi-bin/http.cgi", json={
+                            "cmd": mode_cmd, "method": "POST", "language": "en",
+                            "sessionId": _session_id, "datas": rules, "token": token
+                        })
+                        logger.info(f"Router set to allow-all mode (CMD {mode_cmd}) ✅")
+            # Apply changes on router hardware
+            get_res = await client.post("/cgi-bin/http.cgi", json={"cmd": 23, "method": "GET", "language": "en", "sessionId": _session_id})
+            token = get_res.json().get("token")
+            await client.post("/cgi-bin/http.cgi", json={"cmd": 20, "method": "POST", "language": "en", "sessionId": _session_id, "token": token})
+            logger.info("Router allow-all mode applied via CMD 20 ✅")
+            return True
+        except Exception as e:
+            logger.debug(f"Could not set allow-all mode (router may be offline): {e}")
+            return False
+
+async def set_dhcp_dns(dns_ip: str) -> bool:
+    """Set the router's DHCP server to hand out a custom DNS server IP to clients.
+    This makes all client DNS queries go through the HotZone server for blocking."""
+    global _session_id
+    config = _load_config()
+    router_ip = config.get("routerIp", "192.168.1.1")
+    client = get_client(router_ip)
+    async with _lock:
+        try:
+            await _ensure_logged_in(client, config)
+            # Try CMD 1 (common LAN/DHCP config on ZTE CPEs)
+            res = await client.post("/cgi-bin/http.cgi", json={"cmd": 1, "method": "GET", "language": "en", "sessionId": _session_id})
+            data = res.json()
+            token = data.get("token")
+            datas = data.get("datas", [])
+            changed = False
+            for entry in datas:
+                if "dnsPrimary" in entry or "dns1" in entry or "primaryDns" in entry:
+                    dns_key = next(k for k in ("dnsPrimary", "dns1", "primaryDns") if k in entry)
+                    if entry.get(dns_key) != dns_ip:
+                        entry[dns_key] = dns_ip
+                        changed = True
+                        logger.info(f"Set DHCP DNS primary → {dns_ip}")
+                if "dnsSecondary" in entry or "dns2" in entry or "secondaryDns" in entry:
+                    sec_key = next(k for k in ("dnsSecondary", "dns2", "secondaryDns") if k in entry)
+                    if entry.get(sec_key) not in ("0.0.0.0", "", dns_ip):
+                        entry[sec_key] = ""
+                        changed = True
+            if changed:
+                await client.post("/cgi-bin/http.cgi", json={
+                    "cmd": 1, "method": "POST", "language": "en",
+                    "sessionId": _session_id, "datas": datas, "token": token
+                })
+                logger.info(f"✅ DHCP DNS updated to {dns_ip}")
+            else:
+                logger.info("DHCP DNS already set correctly")
+            return True
+        except Exception as e:
+            logger.warning(f"Could not set DHCP DNS via CMD 1: {e}")
+            # Fallback: try CMD 219
+            try:
+                res = await client.post("/cgi-bin/http.cgi", json={"cmd": 219, "method": "GET", "language": "en", "sessionId": _session_id})
+                data = res.json()
+                token = data.get("token")
+                datas = data.get("datas", [])
+                changed = False
+                for entry in datas:
+                    if "dnsPrimary" in entry or "dns1" in entry:
+                        dns_key = next(k for k in ("dnsPrimary", "dns1") if k in entry)
+                        if entry.get(dns_key) != dns_ip:
+                            entry[dns_key] = dns_ip
+                            changed = True
+                if changed:
+                    await client.post("/cgi-bin/http.cgi", json={
+                        "cmd": 219, "method": "POST", "language": "en",
+                        "sessionId": _session_id, "datas": datas, "token": token
+                    })
+                    logger.info(f"✅ DHCP DNS updated via CMD 219 → {dns_ip}")
+                return True
+            except Exception as e2:
+                logger.warning(f"Could not set DHCP DNS (CMD 1 + 219 failed): {e2}")
+                return False

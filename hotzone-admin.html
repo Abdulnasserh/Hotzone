@@ -1590,6 +1590,20 @@
                 </select></div>
             </div>
           </div>
+          <div class="card" style="margin-bottom:16px;border-left:4px solid #00c853">
+            <div class="label" style="margin-bottom:8px">⚙️ Udhibiti wa Mfumo (System Control)</div>
+            <div id="systemStatus" style="margin-bottom:12px;font-size:0.9em;color:#666">Hali: —</div>
+            <div style="display:flex;gap:12px">
+              <button class="btn success" id="washaBtn" onclick="washaSystem()"
+                style="background:#00c853;color:white;border:none;padding:12px 24px;border-radius:8px;font-weight:bold;cursor:pointer">
+                🚀 Washa System
+              </button>
+              <button class="btn" id="zimaBtn" onclick="zimaSystem()"
+                style="background:#ff1744;color:white;border:none;padding:12px 24px;border-radius:8px;font-weight:bold;cursor:pointer">
+                ⛔ Zima System
+              </button>
+            </div>
+          </div>
           <div style="display:flex;gap:12px;margin-top:16px">
             <button class="btn primary" id="saveSettingsBtn" onclick="saveSettings()">Hifadhi Mipangilio</button>
             <button class="btn danger" id="resetRevenueBtn" onclick="resetRevenue()">🗑️ Futa Rekodi za Mapato
@@ -2265,6 +2279,67 @@
         document.getElementById('cfgDailyCutoff').value = c.dailyCutoff || '';
         document.getElementById('cfgUnblockPrice').value = c.unblockPrice || 1000;
       } catch (e) { console.error(e) }
+      checkSystemStatus();
+    }
+
+    // Washa System — sync whitelist to router
+    async function washaSystem() {
+      const btn = document.getElementById('washaBtn');
+      const statusEl = document.getElementById('systemStatus');
+      btn.disabled = true; btn.textContent = '⏳ Inawasha...';
+      statusEl.textContent = 'Hali: Inawasha mfumo...';
+      try {
+        const r = await fetch('/api/system/start', { method: 'POST' });
+        const d = await r.json();
+        if (d.status === 'ok') {
+          if (d.whitelist_empty) {
+            statusEl.innerHTML = '⚠️ Hali: DNS + DHCP zimewashwa, LAKINI whitelist iko tupu. Ongeza MAC yako kwenye whitelist kwanza!';
+            toast('⚠️ Ongeza MAC yako kwenye whitelist kwanza!', 'warn');
+          } else {
+            statusEl.innerHTML = '✅ Hali: IMEWASHA — vifaa ' + d.allowed_count + ' vimeruhusiwa';
+            toast('🚀 Mfumo umewashwa! Router inalinda mtandao.', 'success');
+          }
+        } else {
+          statusEl.innerHTML = '❌ Hali: Hitilafu — ' + (d.detail || 'Tafadhali angalia router');
+          toast('❌ Imeshindikana kuunganisha na router', 'error');
+        }
+      } catch (e) {
+        statusEl.innerHTML = '❌ Hali: Hitilafu — ' + e.message;
+        toast('❌ Imeshindikana: ' + e.message, 'error');
+      } finally { btn.disabled = false; btn.textContent = '🚀 Washa System'; }
+    }
+
+    async function zimaSystem() {
+      const btn = document.getElementById('zimaBtn');
+      const statusEl = document.getElementById('systemStatus');
+      btn.disabled = true; btn.textContent = '⏳ Inazima...';
+      statusEl.textContent = 'Hali: Inazima mfumo...';
+      try {
+        const r = await fetch('/api/system/stop', { method: 'POST' });
+        const d = await r.json();
+        if (d.status === 'stopped') {
+          statusEl.innerHTML = '⏸️ Hali: IMEZIMWA — hakuna ulinzi wa router';
+          toast('⛔ Mfumo umezimwa.', 'warn');
+        }
+      } catch (e) {
+        statusEl.innerHTML = '❌ Hali: Hitilafu — ' + e.message;
+      } finally { btn.disabled = false; btn.textContent = '⛔ Zima System'; }
+    }
+
+    // Check system status on page load
+    async function checkSystemStatus() {
+      const statusEl = document.getElementById('systemStatus');
+      try {
+        const r = await fetch('/api/system/status');
+        const d = await r.json();
+        if (d.router_connected) {
+          statusEl.innerHTML = '✅ Hali: Router imeunganishwa, vifaa ' + d.device_count;
+        } else {
+          statusEl.innerHTML = '❌ Hali: Router haijaunganishwa';
+        }
+      } catch (e) {
+        statusEl.innerHTML = '❌ Hali: Haiwezi kuanguka';
+      }
     }
 
     async function saveSettings() {
@@ -2383,7 +2458,7 @@
           </div>
           <div style="display:flex; gap:5px; align-items:flex-start; margin-bottom:3px">
             <span style="background:var(--green); color:#000; width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:8px; font-weight:800; flex-shrink:0">2</span>
-            <span>Ukurasa wa <strong>HotZone</strong> utafunguka <strong style="color:var(--green)">moja kwa moja</strong></span>
+            <span>Fungua Chrome uandike: <strong style="color:var(--green)">http://${serverIp}</strong> (au portal itafunguka auto)</span>
           </div>
           <div style="display:flex; gap:5px; align-items:flex-start">
             <span style="background:var(--accent); color:#fff; width:16px; height:16px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:8px; font-weight:800; flex-shrink:0">3</span>
