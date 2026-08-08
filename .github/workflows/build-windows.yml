@@ -17,7 +17,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: '3.12'
         
     - name: Install Dependencies
       run: |
@@ -26,7 +26,7 @@ jobs:
         pip install pyinstaller customtkinter
         
     - name: Install Inno Setup
-      run: choco install innosetup
+      run: choco install innosetup -y
         
     - name: Build with PyInstaller
       shell: powershell
@@ -51,11 +51,11 @@ jobs:
         iscc installer.iss
         
     - name: Upload Installer to GitHub Releases
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: latest-build
-        name: 🚀 Latest Windows Installer
-        body: "Automatically generated Windows setup installer for HotZone Pro. Download and run `HotZonePro_Setup.exe` to install."
+        name: Latest Windows Installer
+        body: "Automatically generated Windows setup installer for HotZone Pro. Download and run HotZonePro_Setup.exe to install."
         prerelease: true
         files: Output/HotZonePro_Setup.exe
       env:
