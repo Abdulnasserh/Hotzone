@@ -1571,8 +1571,73 @@ class ArpSpoofer:
 
     def _spoof_loop(self):
         try:
-            from scapy.all import Ether, ARP, sendp, get_if_hwaddr, conf
+            from scapy.all import Ether, ARP, sendp, get_if_hwaddr, conf, sniff, IP, UDP, DNS, DNSRR, DNSQR, Raw
             my_mac = get_if_hwaddr(conf.iface)
+            
+            # Start a separate thread to sniff and intercept DNS packets from unauthorized clients
+            def dns_interceptor():
+                """Sniff forwarded DNS packets and respond for unauthorized clients."""
+                def handle_pkt(pkt):
+                    if not self.running:
+                        return
+                    if not pkt.haslayer(DNS) or not pkt.haslayer(IP) or not pkt.haslayer(UDP):
+                        return
+                    if pkt[DNS].qr != 0:  # Only handle queries (qr=0)
+                        return
+                    
+                    src_ip = pkt[IP].src
+                    # Skip our own packets
+                    if src_ip == self._server_ip or src_ip == "127.0.0.1":
+                        return
+                    
+                    # Check if this client is authorized
+                    mac = _ip_to_mac.get(src_ip, "").upper()
+                    is_auth = False
+                    if mac:
+                        whitelist = get_whitelist()
+                        for w in whitelist:
+                            if w["mac"].upper() == mac:
+                                is_auth = True
+                                break
+                        if not is_auth:
+                            vouchers = get_vouchers()
+                            now = datetime.now()
+                            for v in vouchers:
+                                if v.get("mac", "").upper() == mac and v.get("status") == "active":
+                                    try:
+                                        if datetime.fromisoformat(v["expires"]) > now:
+                                            is_auth = True
+                                    except:
+                                        pass
+                                    break
+                    
+                    if is_auth:
+                        return  # Let the packet through (IP forwarding handles it)
+                    
+                    # Unauthorized — respond with server IP (redirect to portal)
+                    try:
+                        qname = pkt[DNSQR].qname.decode() if pkt[DNSQR].qname else ""
+                        config = get_config()
+                        server_ip = config.get("serverIp", "192.168.1.162")
+                        
+                        spoofed = (IP(dst=src_ip, src=pkt[IP].dst) /
+                                   UDP(dport=pkt[UDP].sport, sport=53) /
+                                   DNS(id=pkt[DNS].id, qr=1, aa=1, qd=pkt[DNS].qd,
+                                       an=DNSRR(rrname=qname, ttl=60, rdata=server_ip)))
+                        from scapy.all import send as scapy_send
+                        scapy_send(spoofed, verbose=False)
+                    except Exception:
+                        pass
+                
+                try:
+                    sniff(filter="udp port 53", prn=handle_pkt, store=0,
+                          stop_filter=lambda x: not self.running)
+                except Exception as e:
+                    logger.warning(f"⚠️ DNS interceptor stopped: {e}")
+            
+            threading.Thread(target=dns_interceptor, daemon=True).start()
+            logger.info("🔀 DNS interceptor active (sniffing port 53 packets)")
+            
             while self.running:
                 # Send gratuitous ARP: "gateway_ip is at my_mac"
                 pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(
