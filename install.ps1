@@ -68,15 +68,33 @@ if (Test-Path $installDir) {
 Set-Location $installDir
 Write-Host "  Downloaded to: $installDir" -ForegroundColor Green
 
-# --- Step 4: Install Python dependencies ---
-Write-Host "[4/6] Installing dependencies..." -ForegroundColor Yellow
+# --- Step 4: Install Python dependencies + Npcap ---
+Write-Host "[4/7] Installing dependencies..." -ForegroundColor Yellow
 & $python -m pip install --upgrade pip --quiet 2>&1 | Out-Null
 & $python -m pip install -r requirements.txt --quiet 2>&1 | Out-Null
 & $python -m pip install pyinstaller customtkinter --quiet 2>&1 | Out-Null
 Write-Host "  All dependencies installed!" -ForegroundColor Green
 
+# --- Step 4b: Install Npcap (required for ARP spoofing / network control) ---
+Write-Host "[4b/7] Installing Npcap (network driver)..." -ForegroundColor Yellow
+$npcapInstalled = Test-Path "C:\Windows\System32\Npcap"
+if (-not $npcapInstalled) {
+    $npcapUrl = "https://npcap.com/dist/npcap-1.80.exe"
+    $npcapInstaller = "$env:TEMP\npcap-installer.exe"
+    try {
+        Invoke-WebRequest -Uri $npcapUrl -OutFile $npcapInstaller
+        Start-Process -Wait -FilePath $npcapInstaller -ArgumentList "/S", "/winpcap_mode=yes"
+        Remove-Item $npcapInstaller -Force -ErrorAction SilentlyContinue
+        Write-Host "  Npcap installed!" -ForegroundColor Green
+    } catch {
+        Write-Host "  Npcap auto-install failed. Download manually: https://npcap.com" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  Npcap already installed!" -ForegroundColor Green
+}
+
 # --- Step 5: Build with PyInstaller ---
-Write-Host "[5/6] Building HotZonePro.exe (this takes 2-5 minutes)..." -ForegroundColor Yellow
+Write-Host "[5/7] Building HotZonePro.exe (this takes 2-5 minutes)..." -ForegroundColor Yellow
 $ctkPath = & $python -c "import customtkinter; import os; print(os.path.dirname(customtkinter.__file__))"
 
 & $python -m PyInstaller `
@@ -87,9 +105,11 @@ $ctkPath = & $python -c "import customtkinter; import os; print(os.path.dirname(
     --add-data "hotzone-admin.html;." `
     --add-data "$ctkPath;customtkinter" `
     --hidden-import "dnslib" `
+    --hidden-import "scapy" `
     --hidden-import "PIL._tkinter_finder" `
     --collect-all uvicorn `
     --collect-all fastapi `
+    --collect-all scapy `
     gui.py 2>&1 | Out-Null
 
 if (-not (Test-Path "dist\HotZonePro\HotZonePro.exe")) {

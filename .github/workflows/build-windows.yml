@@ -40,9 +40,11 @@ jobs:
           --add-data "hotzone-admin.html;." `
           --add-data "$($ctk_path);customtkinter" `
           --hidden-import "dnslib" `
+          --hidden-import "scapy" `
           --hidden-import "PIL._tkinter_finder" `
           --collect-all uvicorn `
           --collect-all fastapi `
+          --collect-all scapy `
           gui.py
           
     - name: Compile Windows Installer (Inno Setup)

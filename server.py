@@ -1216,7 +1216,33 @@ async def redeem_voucher_code(req: RedeemRequest, request: Request):
 # DnsBlocker — lightweight DNS gatekeeper (no captive portal)
 # Blocks DNS for unauthorized devices so they can't reach the internet
 # Authorized devices get real DNS proxy to 8.8.8.8
+# Also blocks DoH (DNS-over-HTTPS) endpoints for ALL devices to prevent bypass
 # ---------------------------------------------------------------------------
+
+# Known DoH/DoT domains that bypass traditional DNS blocking
+_DOH_DOMAINS = {
+    "dns.google", "dns.google.com", "8.8.8.8.dns", "8.8.4.4.dns",
+    "cloudflare-dns.com", "one.one.one.one", "1dot1dot1dot1.cloudflare-dns.com",
+    "mozilla.cloudflare-dns.com", "firefox.dns.nextdns.io",
+    "dns.nextdns.io", "dns.quad9.net", "dns9.quad9.net",
+    "doh.opendns.com", "dns.adguard.com", "dns-unfiltered.adguard.com",
+    "doh.cleanbrowsing.org", "dns.controld.com", "freedns.controld.com",
+    "dns.mullvad.net", "doh.mullvad.net",
+    "dns.alidns.com", "doh.pub", "dns.twnic.tw",
+    "ordns.he.net", "dns.switch.ch",
+    "doh.xfinity.com", "doh.cox.net",
+    "security.cloudflare-dns.com", "family.cloudflare-dns.com",
+}
+
+# Known DoH server IPs — we return 0.0.0.0 for these to prevent HTTPS-based DNS bypass
+_DOH_IPS_BLOCK = {
+    "1.1.1.1", "1.0.0.1",           # Cloudflare
+    "8.8.8.8", "8.8.4.4",           # Google (block DoH only, we proxy regular DNS ourselves)
+    "9.9.9.9", "149.112.112.112",   # Quad9
+    "208.67.222.222", "208.67.220.220",  # OpenDNS
+    "94.140.14.14", "94.140.15.15",      # AdGuard
+    "185.228.168.9", "185.228.169.9",    # CleanBrowsing
+}
 
 class DnsBlocker:
     def __init__(self):
@@ -1253,6 +1279,14 @@ class DnsBlocker:
             request = DNSRecord.parse(data)
             qname = str(request.q.qname).lower().rstrip('.')
             qtype = request.q.qtype
+
+            # --- Block DoH domains for ALL clients (prevents DNS bypass) ---
+            if qname in _DOH_DOMAINS or any(qname.endswith("." + d) for d in _DOH_DOMAINS):
+                reply = request.reply()
+                if qtype == QTYPE.A:
+                    reply.add_answer(RR(qname + ".", QTYPE.A, rdata=A("0.0.0.0"), ttl=300))
+                self.sock.sendto(reply.pack(), addr)
+                return
 
             is_auth = self._is_authorized(client_ip)
 
@@ -1378,6 +1412,184 @@ def _remove_pf_dns_redirect():
         logger.warning(f"⚠️ pf restore failed: {e}")
 
 # ---------------------------------------------------------------------------
+# Windows Firewall — block DNS bypass + block DoH IPs
+# ---------------------------------------------------------------------------
+
+def _add_windows_firewall_rules():
+    """Block all outbound DNS (port 53) except from this server + block DoH IPs."""
+    if platform.system() != "Windows":
+        return False
+    try:
+        # Remove old rules first (idempotent)
+        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=HotZone-BlockDNS"], 
+                      capture_output=True, text=True)
+        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=HotZone-BlockDoH"],
+                      capture_output=True, text=True)
+        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=HotZone-AllowLocalDNS"],
+                      capture_output=True, text=True)
+
+        # Allow DNS from this server to upstream (8.8.8.8) — so our proxy works
+        subprocess.run([
+            "netsh", "advfirewall", "firewall", "add", "rule",
+            "name=HotZone-AllowLocalDNS", "dir=out", "action=allow",
+            "protocol=UDP", "remoteport=53",
+            "program=" + sys.executable,
+            "enable=yes"
+        ], capture_output=True, text=True)
+
+        # Block ALL other outbound DNS — forces clients to use our DNS blocker
+        # This works because the server acts as DNS proxy; if anyone tries to bypass, it's blocked
+        subprocess.run([
+            "netsh", "advfirewall", "firewall", "add", "rule",
+            "name=HotZone-BlockDNS", "dir=out", "action=block",
+            "protocol=UDP", "remoteport=53",
+            "enable=yes"
+        ], capture_output=True, text=True)
+
+        # Block known DoH server IPs (HTTPS port 443) to prevent DNS-over-HTTPS bypass
+        doh_ips = ",".join(_DOH_IPS_BLOCK)
+        subprocess.run([
+            "netsh", "advfirewall", "firewall", "add", "rule",
+            "name=HotZone-BlockDoH", "dir=out", "action=block",
+            "protocol=TCP", "remoteport=443",
+            "remoteip=" + doh_ips,
+            "enable=yes"
+        ], capture_output=True, text=True)
+
+        logger.info("🛡️ Windows Firewall: DNS bypass + DoH blocked")
+        return True
+    except Exception as e:
+        logger.warning(f"⚠️ Windows Firewall rules failed: {e}")
+        return False
+
+def _remove_windows_firewall_rules():
+    """Remove HotZone firewall rules."""
+    if platform.system() != "Windows":
+        return
+    try:
+        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=HotZone-BlockDNS"],
+                      capture_output=True, text=True)
+        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=HotZone-BlockDoH"],
+                      capture_output=True, text=True)
+        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=HotZone-AllowLocalDNS"],
+                      capture_output=True, text=True)
+        logger.info("🛡️ Windows Firewall: HotZone rules removed")
+    except Exception as e:
+        logger.warning(f"⚠️ Windows Firewall cleanup failed: {e}")
+
+# ---------------------------------------------------------------------------
+# ARP Spoofer — makes all clients think THIS server is the gateway
+# This forces ALL traffic (including DNS) through the server
+# Requires: scapy + Npcap (Windows) or root (macOS/Linux)
+# ---------------------------------------------------------------------------
+
+class ArpSpoofer:
+    def __init__(self):
+        self.running = False
+        self._thread = None
+
+    def _enable_ip_forwarding(self):
+        """Enable IP forwarding so the PC can route traffic to the real gateway."""
+        try:
+            if platform.system() == "Windows":
+                subprocess.run(["reg", "add", 
+                    r"HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters",
+                    "/v", "IPEnableRouter", "/t", "REG_DWORD", "/d", "1", "/f"],
+                    capture_output=True)
+                # Also enable via netsh for immediate effect
+                subprocess.run(["netsh", "interface", "ipv4", "set", "interface", 
+                    "interface=Wi-Fi", "forwarding=enabled"], capture_output=True)
+                logger.info("🔀 IP forwarding enabled (Windows)")
+            elif platform.system() == "Darwin":
+                subprocess.run(["sysctl", "-w", "net.inet.ip.forwarding=1"], capture_output=True)
+                logger.info("🔀 IP forwarding enabled (macOS)")
+            else:
+                subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture_output=True)
+                logger.info("🔀 IP forwarding enabled (Linux)")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not enable IP forwarding: {e}")
+
+    def _disable_ip_forwarding(self):
+        """Disable IP forwarding."""
+        try:
+            if platform.system() == "Windows":
+                subprocess.run(["reg", "add",
+                    r"HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters",
+                    "/v", "IPEnableRouter", "/t", "REG_DWORD", "/d", "0", "/f"],
+                    capture_output=True)
+            elif platform.system() == "Darwin":
+                subprocess.run(["sysctl", "-w", "net.inet.ip.forwarding=0"], capture_output=True)
+            else:
+                subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=0"], capture_output=True)
+        except Exception:
+            pass
+
+    def start(self, gateway_ip: str, server_ip: str):
+        """Start ARP spoofing — tell all clients that gateway_ip is at our MAC."""
+        if self.running:
+            return
+        try:
+            from scapy.all import get_if_hwaddr, conf, Ether, ARP, sendp
+            self._scapy_available = True
+        except ImportError:
+            logger.warning("⚠️ scapy not installed — ARP spoofing disabled. Install: pip install scapy")
+            return
+        
+        # Enable IP forwarding so authorized traffic passes through to the real gateway
+        self._enable_ip_forwarding()
+        
+        self.running = True
+        self._gateway_ip = gateway_ip
+        self._server_ip = server_ip
+        self._thread = threading.Thread(target=self._spoof_loop, daemon=True)
+        self._thread.start()
+        logger.info(f"🔀 ARP Spoofer active: clients think {gateway_ip} is at this PC")
+
+    def stop(self):
+        """Stop ARP spoofing and restore real gateway ARP."""
+        if not self.running:
+            return
+        self.running = False
+        if self._thread:
+            self._thread.join(timeout=5)
+        # Disable IP forwarding
+        self._disable_ip_forwarding()
+        # Send corrective ARP to restore real gateway
+        try:
+            from scapy.all import Ether, ARP, sendp, getmacbyip
+            real_gw_mac = getmacbyip(self._gateway_ip)
+            if real_gw_mac:
+                # Broadcast the real gateway MAC to all clients
+                pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(
+                    op=2, psrc=self._gateway_ip, hwsrc=real_gw_mac,
+                    pdst="255.255.255.255"
+                )
+                sendp(pkt, count=5, inter=0.2, verbose=False)
+                logger.info("🔀 ARP Spoofer stopped — real gateway restored")
+        except Exception as e:
+            logger.warning(f"⚠️ ARP restore failed: {e}")
+
+    def _spoof_loop(self):
+        try:
+            from scapy.all import Ether, ARP, sendp, get_if_hwaddr, conf
+            my_mac = get_if_hwaddr(conf.iface)
+            while self.running:
+                # Send gratuitous ARP: "gateway_ip is at my_mac"
+                pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(
+                    op=2,  # ARP reply
+                    psrc=self._gateway_ip,  # Pretend to be the gateway
+                    hwsrc=my_mac,           # But with OUR MAC
+                    pdst="255.255.255.255"  # Broadcast to all
+                )
+                sendp(pkt, verbose=False)
+                time.sleep(3)  # Re-send every 3 seconds to maintain the spoof
+        except Exception as e:
+            logger.warning(f"⚠️ ARP spoof loop error: {e}")
+            self.running = False
+
+_arp_spoofer = ArpSpoofer()
+
+# ---------------------------------------------------------------------------
 # System Control — Washa System
 # ---------------------------------------------------------------------------
 
@@ -1417,6 +1629,11 @@ async def system_start():
         await set_dhcp_dns(server_ip)
         # macOS pf redirect: force all network DNS traffic through our blocker
         _add_pf_dns_redirect()
+        # Windows Firewall: block DNS bypass + DoH
+        _add_windows_firewall_rules()
+        # ARP Spoof: make clients think this server is the gateway (most reliable method)
+        router_ip = config.get("routerIp", "192.168.1.1")
+        _arp_spoofer.start(gateway_ip=router_ip, server_ip=server_ip)
         global _enforcer_task
         if not _enforcer_task or _enforcer_task.done():
             _enforcer_task = asyncio.create_task(expiry_enforcer())
@@ -1442,6 +1659,10 @@ async def system_stop():
         logger.info("⛔ DNS blocker stopped")
     # Remove pf redirect
     _remove_pf_dns_redirect()
+    # Remove Windows Firewall rules
+    _remove_windows_firewall_rules()
+    # Stop ARP spoofer
+    _arp_spoofer.stop()
     # Restore router to Allow-All mode
     await disable_whitelist_mode()
     return {"status": "stopped"}
@@ -1592,8 +1813,8 @@ async def expiry_enforcer():
         except Exception as e:
             logger.error(f"Expiry enforcer error: {e}")
 
-        # Reduce router load: Expiry check every 60s, hardware audit every 5 minutes
-        await asyncio.sleep(60) 
+        # Check expiry every 15 seconds for aggressive enforcement
+        await asyncio.sleep(15) 
 
 
 
