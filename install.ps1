@@ -38,12 +38,25 @@ foreach ($cmd in @("python", "python3", "$env:LOCALAPPDATA\Programs\Python\Pytho
 
 if (-not $python) {
     Write-Host "  Python not found. Installing Python 3.12..." -ForegroundColor Yellow
-    $pyInstaller = "$env:TEMP\python-installer.exe"
-    Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe" -OutFile $pyInstaller
-    Start-Process -Wait -FilePath $pyInstaller -ArgumentList "/quiet", "InstallAllUsers=1", "PrependPath=1", "Include_test=0"
-    Remove-Item $pyInstaller -Force
-    # Refresh PATH
+    
+    # Method 1: Try winget (built into Windows 10/11)
+    $wingetExists = Get-Command winget -ErrorAction SilentlyContinue
+    if ($wingetExists) {
+        Write-Host "  Using Windows Package Manager (winget)..." -ForegroundColor Gray
+        winget install Python.Python.3.12 --silent --accept-package-agreements --accept-source-agreements 2>&1 | Out-Null
+    } else {
+        # Method 2: Direct download from python.org
+        Write-Host "  Downloading from python.org..." -ForegroundColor Gray
+        $pyInstaller = "$env:TEMP\python-installer.exe"
+        Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe" -OutFile $pyInstaller
+        # /quiet = no GUI, InstallAllUsers=1 = system-wide, PrependPath=1 = add to PATH
+        Start-Process -Wait -FilePath $pyInstaller -ArgumentList "/quiet", "InstallAllUsers=1", "PrependPath=1", "Include_test=0"
+        Remove-Item $pyInstaller -Force
+    }
+    
+    # Refresh PATH so we can find python
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+    
     # Find python after install
     foreach ($cmd in @("python", "C:\Program Files\Python312\python.exe", "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe")) {
         try {
@@ -53,6 +66,8 @@ if (-not $python) {
     }
     if (-not $python) {
         Write-Host "  ERROR: Python installation failed!" -ForegroundColor Red
+        Write-Host "  Please install Python manually from https://www.python.org/downloads/" -ForegroundColor Yellow
+        Write-Host "  Make sure to check 'Add Python to PATH' during install." -ForegroundColor Yellow
         pause
         exit 1
     }
