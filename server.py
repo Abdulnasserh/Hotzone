@@ -1681,6 +1681,91 @@ async def system_status():
     except Exception as e:
         return {"router_connected": False, "device_count": 0, "error": str(e)}
 
+@app.get("/api/devices/live")
+async def live_devices():
+    """Get all connected devices with their authorization status."""
+    try:
+        devices = await scrape_devices()
+        now = datetime.now()
+        whitelist = get_whitelist()
+        vouchers = get_vouchers()
+        config = get_config()
+        server_ip = config.get("serverIp", "192.168.1.162")
+        nicknames = {}
+        try:
+            db = _get_db()
+            cur = db.execute("SELECT mac, name FROM nicknames")
+            for row in cur.fetchall():
+                nicknames[row[0].upper()] = row[1]
+        except Exception:
+            pass
+
+        # Build set of authorized MACs
+        authorized_macs = {w["mac"].upper() for w in whitelist}
+        for v in vouchers:
+            if v.get("status") == "active":
+                try:
+                    if datetime.fromisoformat(v["expires"]) > now:
+                        authorized_macs.add(v["mac"].upper())
+                except Exception:
+                    pass
+
+        result = []
+        for d in devices:
+            mac = (d.get("mac") or d.get("MacAddress", "")).upper()
+            ip = d.get("ip") or d.get("IpAddress", "")
+            hostname = d.get("hostname") or d.get("HostName", "")
+            is_authorized = mac in authorized_macs
+            is_server = (ip == server_ip)
+            
+            # Update _ip_to_mac cache
+            if ip and mac:
+                _ip_to_mac[ip] = mac
+
+            # Find voucher info if authorized via voucher
+            voucher_info = None
+            for v in vouchers:
+                if v.get("mac", "").upper() == mac and v.get("status") == "active":
+                    try:
+                        exp = datetime.fromisoformat(v["expires"])
+                        if exp > now:
+                            remaining = exp - now
+                            hours = int(remaining.total_seconds() // 3600)
+                            mins = int((remaining.total_seconds() % 3600) // 60)
+                            voucher_info = {
+                                "expires": v["expires"],
+                                "remaining": f"{hours}h {mins}m",
+                                "duration": v.get("duration", ""),
+                                "price": v.get("price", 0)
+                            }
+                    except Exception:
+                        pass
+                    break
+
+            result.append({
+                "mac": mac,
+                "ip": ip,
+                "hostname": hostname,
+                "nickname": nicknames.get(mac, ""),
+                "authorized": is_authorized,
+                "is_server": is_server,
+                "voucher": voucher_info,
+                "status": "server" if is_server else ("authorized" if is_authorized else "unauthorized")
+            })
+
+        # Sort: server first, then authorized, then unauthorized
+        result.sort(key=lambda x: (0 if x["is_server"] else 1 if x["authorized"] else 2, x["ip"]))
+        
+        return {
+            "devices": result,
+            "total": len(result),
+            "authorized_count": sum(1 for d in result if d["authorized"]),
+            "unauthorized_count": sum(1 for d in result if not d["authorized"] and not d["is_server"])
+        }
+    except Exception as e:
+        logger.error(f"Live devices error: {e}")
+        return {"devices": [], "total": 0, "authorized_count": 0, "unauthorized_count": 0, "error": str(e)}
+
 # ---------------------------------------------------------------------------
 # WebSocket
 # ---------------------------------------------------------------------------

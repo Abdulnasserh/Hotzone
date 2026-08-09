@@ -1446,25 +1446,31 @@
         </div>
       </div>
 
-      <!-- Mtandaoni (Active Access) -->
+      <!-- Mtandaoni (Live Connected Devices) -->
       <div class="page" id="page-activeaccess">
-        <h2>Vifaa Vyenye Intaneti Sahivi</h2>
-        <div style="margin-bottom:12px"><button class="btn primary" id="refreshActiveBtn"
-            onclick="refreshActiveAccess()">🔄 Onyesha Upya Mtandao</button></div>
+        <h2>Vifaa Vilivyounganishwa (Live)</h2>
+        <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center;">
+          <button class="btn primary" id="refreshActiveBtn" onclick="refreshActiveAccess()">🔄 Onyesha Upya</button>
+          <span id="liveDeviceStats" style="font-size:13px;color:var(--td)"></span>
+          <label style="font-size:12px;color:var(--td);margin-left:auto;display:flex;align-items:center;gap:4px;">
+            <input type="checkbox" id="autoRefreshLive" checked> Auto-refresh (10s)
+          </label>
+        </div>
         <div class="table-wrapper">
           <table>
             <thead>
               <tr>
-                <th>Hostname</th>
+                <th>Kifaa</th>
                 <th>MAC Address</th>
                 <th>IP</th>
-                <th>Aina ya Ruhusa</th>
+                <th>Hali</th>
+                <th>Muda Uliobaki</th>
                 <th>Vitendo</th>
               </tr>
             </thead>
             <tbody id="activeAccessTable">
               <tr>
-                <td colspan="5" class="empty">Inapakia...</td>
+                <td colspan="6" class="empty">Inapakia...</td>
               </tr>
             </tbody>
           </table>
@@ -2130,42 +2136,100 @@
       const btn = document.getElementById('refreshActiveBtn');
       btnLoading(btn, true);
       const tb = document.getElementById('activeAccessTable');
-      tb.innerHTML = '<tr class="table-loading"><td colspan="5" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div style="font-size:14px;font-weight:600;color:var(--accent)">Inasoma vifaa vyenye mtandao...</div></td></tr>';
+      const stats = document.getElementById('liveDeviceStats');
+      tb.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:30px;color:var(--td)"><span style="display:inline-block;width:20px;height:20px;border:2px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span> Inasoma...</td></tr>';
 
       try {
-        const res = await fetchRetry(API + '/api/devices').then(r => r.json());
+        const res = await fetchRetry(API + '/api/devices/live').then(r => r.json());
+        const devs = res.devices || [];
+        
+        stats.innerHTML = `<span style="color:var(--green)">● ${res.authorized_count} authorized</span> &nbsp; <span style="color:var(--red)">● ${res.unauthorized_count} unauthorized</span> &nbsp; <span style="color:var(--td)">Jumla: ${res.total}</span>`;
 
-        // Handle server still loading (initial scrape not done)
-        if (res.loading) {
-          tb.innerHTML = '<tr class="table-loading"><td colspan="5" style="text-align:center;padding:40px;color:var(--td)"><div style="margin-bottom:12px;"><span style="display:inline-block;width:28px;height:28px;border:3px solid var(--border);border-radius:50%;border-top-color:var(--accent);animation:spin .6s linear infinite;vertical-align:middle;"></span></div><div style="font-size:14px;font-weight:600;color:var(--accent)">Mfumo unajiandaa... inatafuta vifaa kwenye router</div><div style="font-size:11px;color:var(--td);margin-top:8px">Tafadhali subiri sekunde chache</div></td></tr>';
-          btnLoading(btn, false);
-          setTimeout(() => refreshActiveAccess(), 5000);
-          return;
+        if (!devs.length) { 
+          tb.innerHTML = '<tr><td colspan="6" class="empty">Hakuna kifaa kilichounganishwa.</td></tr>'; 
+          return; 
         }
-
-        const devs = res.devices || res;
-
-        // Filter to officially allowed or unauthorized_allowed devices
-        const activeDevs = devs.filter(d => d.status === 'active' || d.status === 'whitelisted' || d.status === 'unauthorized_allowed');
-
-        if (!activeDevs.length) { tb.innerHTML = '<tr><td colspan="5" class="empty">Hakuna kifaa chochote chenye mtandao sasa hivi.</td></tr>'; return; }
-        tb.innerHTML = activeDevs.map(d => `<tr>
-      <td>${renderName(d.mac, d.nickname, d.host)}</td><td style="font-size:11px">${d.mac}</td><td>${d.ip}</td>
-      <td>
-        ${d.status === 'active' ? '<span class="badge active" style="margin-right:6px">Vocha Hai</span><span style="font-size:11px">bado </span><span class="timer" style="font-size:11px">' + fmtTime(d.time_remaining) + '</span>' : ''}
-        ${d.status === 'whitelisted' ? '<span class="badge whitelisted">Whitelist</span>' : ''}
-        ${d.status === 'unauthorized_allowed' ? '<span class="badge unauthorized_allowed">IMEUNGANISHWA (LEAK)</span>' : ''}
-      </td>
-      <td>
-        <button class="btn sm danger" onclick="blockDev('${d.mac}',this)">🚫 Tenganisha (Zuia)</button>
-      </td>
-    </tr>`).join('');
+        
+        tb.innerHTML = devs.map(d => {
+          let statusBadge = '';
+          let statusColor = '';
+          if (d.is_server) {
+            statusBadge = '<span class="badge" style="background:#6366f1;color:#fff">SERVER</span>';
+            statusColor = '#6366f1';
+          } else if (d.authorized) {
+            statusBadge = '<span class="badge" style="background:var(--green);color:#fff">AUTHORIZED</span>';
+            statusColor = 'var(--green)';
+          } else {
+            statusBadge = '<span class="badge" style="background:var(--red);color:#fff">BLOCKED</span>';
+            statusColor = 'var(--red)';
+          }
+          
+          let remaining = '-';
+          if (d.voucher) {
+            remaining = '<span style="color:var(--green);font-weight:600">' + d.voucher.remaining + '</span>';
+          } else if (d.authorized && !d.is_server) {
+            remaining = '<span style="color:var(--blue)">Whitelist</span>';
+          }
+          
+          let actions = '';
+          if (!d.is_server) {
+            if (d.authorized) {
+              actions = `<button class="btn sm danger" onclick="blockDev('${d.mac}',this)">🚫 Zuia</button>`;
+            } else {
+              actions = `<button class="btn sm primary" onclick="quickWhitelist('${d.mac}','${d.hostname}')">✅ Ruhusu</button>`;
+            }
+          } else {
+            actions = '<span style="font-size:11px;color:var(--td)">PC yako</span>';
+          }
+          
+          let name = d.nickname || d.hostname || '<span style="color:var(--td)">—</span>';
+          
+          return `<tr style="border-left:3px solid ${statusColor}">
+            <td><strong>${name}</strong></td>
+            <td style="font-size:11px;font-family:monospace">${d.mac}</td>
+            <td>${d.ip}</td>
+            <td>${statusBadge}</td>
+            <td>${remaining}</td>
+            <td>${actions}</td>
+          </tr>`;
+        }).join('');
       } catch (e) {
         console.error(e);
-        tb.innerHTML = '<tr><td colspan="5" class="empty" style="color:var(--red)">Imeshindikana kupakia orodha ya mtandao.</td></tr>';
+        tb.innerHTML = '<tr><td colspan="6" class="empty" style="color:var(--red)">Imeshindikana kupakia: ' + e.message + '</td></tr>';
       }
       finally { btnLoading(btn, false); }
     }
+
+    // Quick whitelist from live view
+    async function quickWhitelist(mac, hostname) {
+      try {
+        const r = await fetch(API + '/api/whitelist', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({mac: mac, hostname: hostname || 'Unknown'})
+        });
+        if (r.ok) {
+          toast('✅ ' + mac + ' imeongezwa kwenye whitelist', 'success');
+          refreshActiveAccess();
+        } else {
+          toast('❌ Imeshindikana', 'error');
+        }
+      } catch(e) { toast('❌ ' + e.message, 'error'); }
+    }
+
+    // Auto-refresh live devices every 10s
+    let _liveInterval = null;
+    function startLiveAutoRefresh() {
+      if (_liveInterval) clearInterval(_liveInterval);
+      _liveInterval = setInterval(() => {
+        const cb = document.getElementById('autoRefreshLive');
+        const page = document.getElementById('page-activeaccess');
+        if (cb && cb.checked && page && page.classList.contains('active')) {
+          refreshActiveAccess();
+        }
+      }, 10000);
+    }
+    startLiveAutoRefresh();
 
     async function blockDev(mac, btn) {
       if (btn) { btn.disabled = true; btn.classList.add('loading'); btn.textContent = 'Inazuia...'; }
