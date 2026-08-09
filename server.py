@@ -1467,17 +1467,31 @@ def _remove_pf_dns_redirect():
 # ---------------------------------------------------------------------------
 
 def _add_windows_firewall_rules():
-    """Block all outbound DNS (port 53) except from this server + block DoH IPs."""
+    """Allow inbound on ports 53/80, block outbound DNS bypass + DoH IPs."""
     if platform.system() != "Windows":
         return False
     try:
         # Remove old rules first (idempotent)
-        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=HotZone-BlockDNS"], 
-                      capture_output=True, text=True)
-        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=HotZone-BlockDoH"],
-                      capture_output=True, text=True)
-        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=HotZone-AllowLocalDNS"],
-                      capture_output=True, text=True)
+        for name in ["HotZone-BlockDNS", "HotZone-BlockDoH", "HotZone-AllowLocalDNS",
+                     "HotZone-AllowInboundDNS", "HotZone-AllowInboundHTTP"]:
+            subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=" + name],
+                          capture_output=True, text=True)
+
+        # CRITICAL: Allow INBOUND on port 53 (so LAN devices can reach our DNS blocker)
+        subprocess.run([
+            "netsh", "advfirewall", "firewall", "add", "rule",
+            "name=HotZone-AllowInboundDNS", "dir=in", "action=allow",
+            "protocol=UDP", "localport=53",
+            "enable=yes"
+        ], capture_output=True, text=True)
+
+        # CRITICAL: Allow INBOUND on port 80 (so LAN devices can reach the portal)
+        subprocess.run([
+            "netsh", "advfirewall", "firewall", "add", "rule",
+            "name=HotZone-AllowInboundHTTP", "dir=in", "action=allow",
+            "protocol=TCP", "localport=80",
+            "enable=yes"
+        ], capture_output=True, text=True)
 
         # Allow DNS from this server to upstream (8.8.8.8) — so our proxy works
         subprocess.run([
@@ -1488,8 +1502,7 @@ def _add_windows_firewall_rules():
             "enable=yes"
         ], capture_output=True, text=True)
 
-        # Block ALL other outbound DNS — forces clients to use our DNS blocker
-        # This works because the server acts as DNS proxy; if anyone tries to bypass, it's blocked
+        # Block ALL other outbound DNS — prevents bypass via manual DNS
         subprocess.run([
             "netsh", "advfirewall", "firewall", "add", "rule",
             "name=HotZone-BlockDNS", "dir=out", "action=block",
@@ -1507,7 +1520,7 @@ def _add_windows_firewall_rules():
             "enable=yes"
         ], capture_output=True, text=True)
 
-        logger.info("🛡️ Windows Firewall: DNS bypass + DoH blocked")
+        logger.info("🛡️ Windows Firewall: inbound DNS/HTTP allowed + outbound DNS/DoH blocked")
         return True
     except Exception as e:
         logger.warning(f"⚠️ Windows Firewall rules failed: {e}")
@@ -1518,12 +1531,10 @@ def _remove_windows_firewall_rules():
     if platform.system() != "Windows":
         return
     try:
-        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=HotZone-BlockDNS"],
-                      capture_output=True, text=True)
-        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=HotZone-BlockDoH"],
-                      capture_output=True, text=True)
-        subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=HotZone-AllowLocalDNS"],
-                      capture_output=True, text=True)
+        for name in ["HotZone-BlockDNS", "HotZone-BlockDoH", "HotZone-AllowLocalDNS",
+                     "HotZone-AllowInboundDNS", "HotZone-AllowInboundHTTP"]:
+            subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=" + name],
+                          capture_output=True, text=True)
         logger.info("🛡️ Windows Firewall: HotZone rules removed")
     except Exception as e:
         logger.warning(f"⚠️ Windows Firewall cleanup failed: {e}")
@@ -1547,9 +1558,16 @@ class ArpSpoofer:
                     r"HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters",
                     "/v", "IPEnableRouter", "/t", "REG_DWORD", "/d", "1", "/f"],
                     capture_output=True)
-                # Also enable via netsh for immediate effect
-                subprocess.run(["netsh", "interface", "ipv4", "set", "interface", 
-                    "interface=Wi-Fi", "forwarding=enabled"], capture_output=True)
+                # Enable forwarding on all interfaces (don't hardcode interface name)
+                r = subprocess.run(["netsh", "interface", "ipv4", "show", "interfaces"],
+                                   capture_output=True, text=True)
+                for line in r.stdout.splitlines():
+                    # Try common wireless interface names
+                    for iface in ["Wi-Fi", "WiFi", "Wireless", "WLAN"]:
+                        if iface.lower() in line.lower():
+                            subprocess.run(["netsh", "interface", "ipv4", "set", "interface",
+                                f"interface={iface}", "forwarding=enabled"], capture_output=True)
+                            break
                 logger.info("🔀 IP forwarding enabled (Windows)")
             elif platform.system() == "Darwin":
                 subprocess.run(["sysctl", "-w", "net.inet.ip.forwarding=1"], capture_output=True)
