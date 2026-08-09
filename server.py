@@ -30,6 +30,7 @@ import sys
 import os
 import subprocess
 import platform
+import re
 
 
 # ---------------------------------------------------------------------------
@@ -1166,8 +1167,11 @@ async def redeem_voucher_code(req: RedeemRequest, request: Request):
     vouchers.append(session_voucher)
     save_vouchers(vouchers)
 
-    # Unblock on the router
+    # Unblock on the router (adds MAC to CMD 23 filter rules)
     await unblock_device(mac)
+    
+    # Also refresh DNS blocker cache so device gets internet immediately
+    DnsBlocker._auth_cache_time = 0  # Force cache refresh
 
     # Update state store
     devices_store = get_devices_store()
@@ -1266,7 +1270,8 @@ class DnsBlocker:
     def _loop(self):
         while self.running:
             try:
-                data, addr = self.sock.recvfrom(512)
+                self._refresh_auth_cache()
+                data, addr = self.sock.recvfrom(4096)
                 self._handle(data, addr)
             except socket.timeout:
                 continue
@@ -1315,25 +1320,71 @@ class DnsBlocker:
     def _is_authorized(self, ip):
         if ip in ("127.0.0.1", "::1"):
             return True
-        config = get_config()
+        config = self._cached_config()
         if ip == config.get("serverIp", ""):
             return True
         mac = _ip_to_mac.get(ip)
         if not mac:
-            return False
+            # Try ARP table lookup for unknown IPs
+            mac = self._arp_lookup(ip)
+            if mac:
+                _ip_to_mac[ip] = mac
+            else:
+                return False  # Can't identify device — block it
         mac = mac.upper()
-        now = datetime.now()
-        for w in get_whitelist():
-            if w["mac"].upper() == mac:
-                return True
-        for v in get_vouchers():
-            if v.get("mac", "").upper() == mac and v.get("status") == "active":
-                try:
-                    if datetime.fromisoformat(v["expires"]) > now:
-                        return True
-                except Exception:
-                    pass
-        return False
+        # Check cached authorized MACs (refreshed every 5s)
+        return mac in self._authorized_macs_cache
+
+    def _arp_lookup(self, ip):
+        """Quick ARP table lookup to find MAC for an IP."""
+        try:
+            if platform.system() == "Windows":
+                r = subprocess.run(["arp", "-a", ip], capture_output=True, text=True, timeout=2)
+            else:
+                r = subprocess.run(["arp", "-n", ip], capture_output=True, text=True, timeout=2)
+            for line in r.stdout.splitlines():
+                # Look for MAC pattern XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX
+                m = re.search(r'([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}', line)
+                if m:
+                    return m.group(0).replace("-", ":").upper()
+        except Exception:
+            pass
+        return None
+
+    # --- Caching to avoid hammering SQLite on every DNS packet ---
+    _config_cache = None
+    _config_cache_time = 0
+    _authorized_macs_cache = set()
+    _auth_cache_time = 0
+
+    def _cached_config(self):
+        now = time.time()
+        if DnsBlocker._config_cache is None or now - DnsBlocker._config_cache_time > 10:
+            DnsBlocker._config_cache = get_config()
+            DnsBlocker._config_cache_time = now
+        return DnsBlocker._config_cache
+
+    def _refresh_auth_cache(self):
+        """Rebuild authorized MACs set from DB — called periodically."""
+        now_t = time.time()
+        if now_t - DnsBlocker._auth_cache_time < 5:
+            return
+        DnsBlocker._auth_cache_time = now_t
+        macs = set()
+        try:
+            for w in get_whitelist():
+                macs.add(w["mac"].upper())
+            now = datetime.now()
+            for v in get_vouchers():
+                if v.get("mac", "").upper() and v.get("status") == "active":
+                    try:
+                        if datetime.fromisoformat(v["expires"]) > now:
+                            macs.add(v["mac"].upper())
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        DnsBlocker._authorized_macs_cache = macs
 
     def stop(self):
         self.running = False
@@ -1685,8 +1736,7 @@ async def system_start():
             if ok:
                 await purge_unauthorized_macs(active_macs)
         else:
-            # Always enforce whitelist mode even when empty (blocks ALL until admin adds own MAC)
-            ok = await sync_whitelist_to_router([])
+            ok = False
             logger.warning("⚠️ Whitelist iko tupu — hakuna MAC iliyoruhusiwa. Ongeza MAC yako kwenye whitelist kwanza!")
         # Set router DHCP to use this server as DNS (so DNS blocker intercepts all queries)
         config = get_config()
@@ -1759,7 +1809,7 @@ async def live_devices():
         nicknames = {}
         try:
             db = _get_db()
-            cur = db.execute("SELECT mac, name FROM nicknames")
+            cur = db.execute("SELECT mac, nickname FROM device_nicknames")
             for row in cur.fetchall():
                 nicknames[row[0].upper()] = row[1]
         except Exception:
@@ -1994,9 +2044,15 @@ if __name__ == "__main__":
     import webbrowser
     import threading
     
-    # 1. Force-kill on Ctrl+C so the process never hangs
+    # 1. Cleanup on Ctrl+C before exit
     def _force_exit(sig, frame):
-        print("\n🛑 Server stopping...")
+        print("\n🛑 Server stopping... cleaning up...")
+        # Cleanup network modifications
+        _remove_pf_dns_redirect()
+        _remove_windows_firewall_rules()
+        _arp_spoofer.stop()
+        if _dns_blocker.running:
+            _dns_blocker.stop()
         os._exit(0)
     signal.signal(signal.SIGINT, _force_exit)
     signal.signal(signal.SIGTERM, _force_exit)

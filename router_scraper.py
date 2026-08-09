@@ -327,6 +327,11 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
     global _session_id
     config = _load_config()
 
+    # SAFETY: Never sync empty whitelist — it would lock ALL devices off the network
+    if not whitelist:
+        logger.warning("sync_whitelist_to_router called with empty whitelist — skipping to prevent lockout")
+        return False
+
     router_ip = config.get("routerIp", "192.168.1.1")
     client = get_client(router_ip)
 
@@ -336,6 +341,14 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
 
             get_res = await client.post("/cgi-bin/http.cgi", json={"cmd": 23, "method": "GET", "language": "en", "sessionId": _session_id})
             get_data = get_res.json()
+            
+            # Check for auth failure and re-login
+            if get_data.get("message") == "NO_AUTH":
+                _session_id = None
+                await _ensure_logged_in(client, config)
+                get_res = await client.post("/cgi-bin/http.cgi", json={"cmd": 23, "method": "GET", "language": "en", "sessionId": _session_id})
+                get_data = get_res.json()
+            
             token = get_data.get("token")
             rules = get_data.get("datas", [])
 
@@ -489,8 +502,10 @@ async def set_dhcp_dns(dns_ip: str) -> bool:
             token = data.get("token")
             datas = data.get("datas", [])
             changed = False
+            dns_key_found = False
             for entry in datas:
                 if "dnsPrimary" in entry or "dns1" in entry or "primaryDns" in entry:
+                    dns_key_found = True
                     dns_key = next(k for k in ("dnsPrimary", "dns1", "primaryDns") if k in entry)
                     if entry.get(dns_key) != dns_ip:
                         entry[dns_key] = dns_ip
@@ -501,6 +516,9 @@ async def set_dhcp_dns(dns_ip: str) -> bool:
                     if entry.get(sec_key) not in ("0.0.0.0", "", dns_ip):
                         entry[sec_key] = ""
                         changed = True
+            if not dns_key_found:
+                logger.warning("⚠️ No DNS key found in CMD 1 response — DHCP DNS NOT set")
+                raise Exception("No DNS key in CMD 1 datas")
             if changed:
                 await client.post("/cgi-bin/http.cgi", json={
                     "cmd": 1, "method": "POST", "language": "en",
