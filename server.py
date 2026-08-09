@@ -1764,9 +1764,12 @@ async def system_start():
         _add_pf_dns_redirect()
         # Windows Firewall: block DNS bypass + DoH
         _add_windows_firewall_rules()
-        # ARP Spoof: make clients think this server is the gateway (most reliable method)
-        router_ip = config.get("routerIp", "192.168.1.1")
-        _arp_spoofer.start(gateway_ip=router_ip, server_ip=server_ip)
+        # ARP Spoof (optional bonus layer — works without it)
+        try:
+            router_ip = config.get("routerIp", "192.168.1.1")
+            _arp_spoofer.start(gateway_ip=router_ip, server_ip=server_ip)
+        except Exception as e:
+            logger.info(f"ℹ️ ARP spoofing unavailable (not critical): {e}")
         global _enforcer_task
         if not _enforcer_task or _enforcer_task.done():
             _enforcer_task = asyncio.create_task(expiry_enforcer())
