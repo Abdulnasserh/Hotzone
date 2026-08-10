@@ -1817,6 +1817,42 @@ async def system_status():
     except Exception as e:
         return {"router_connected": False, "device_count": 0, "error": str(e)}
 
+@app.get("/api/router/test")
+async def router_test():
+    """Test router connection with full diagnostics — helps debug wrong IP/password."""
+    config = get_config()
+    router_ip = config.get("routerIp", "192.168.1.1")
+    router_user = config.get("routerUser", "admin")
+    router_pass = config.get("routerPass", "")
+    result = {
+        "router_ip": router_ip,
+        "router_user": router_user,
+        "ping": False,
+        "login": False,
+        "devices": 0,
+        "error": None
+    }
+    # Step 1: Can we reach the router at all?
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(base_url=f"http://{router_ip}", timeout=5.0, verify=False) as c:
+            r = await c.get("/")
+            result["ping"] = r.status_code < 500
+    except Exception as e:
+        result["error"] = f"Cannot reach router at {router_ip}: {str(e)}"
+        return result
+    # Step 2: Try login
+    try:
+        from router_scraper import scrape_devices, shutdown_scraper
+        import router_scraper as rs
+        rs._session_id = None  # Force fresh login
+        devices = await scrape_devices()
+        result["login"] = True
+        result["devices"] = len(devices)
+    except Exception as e:
+        result["error"] = f"Login failed: {str(e)}"
+    return result
+
 @app.get("/api/devices/live")
 async def live_devices():
     """Get all connected devices with their authorization status."""

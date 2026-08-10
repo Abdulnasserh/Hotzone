@@ -1558,6 +1558,10 @@
               <div class="form-group"><label>Username</label><input id="cfgRouterUser"></div>
               <div class="form-group"><label>Password</label><input id="cfgRouterPass" type="password"></div>
             </div>
+            <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
+              <button class="btn primary" id="testRouterBtn" onclick="testRouterConnection()" style="flex:1">🔌 Test Router Connection</button>
+              <span id="routerTestResult" style="font-size:13px"></span>
+            </div>
           </div>
           <div class="card" style="margin-bottom:16px">
             <div class="label" style="margin-bottom:12px">Server Settings</div>
@@ -2404,6 +2408,35 @@
       } catch (e) {
         statusEl.innerHTML = '❌ Hali: Haiwezi kuanguka';
       }
+    }
+
+    async function testRouterConnection() {
+      const btn = document.getElementById('testRouterBtn');
+      const result = document.getElementById('routerTestResult');
+      btn.disabled = true;
+      result.innerHTML = '<span style="color:var(--accent)">⏳ Testing...</span>';
+      // Save current settings first so test uses latest values
+      await saveSettings().catch(() => {});
+      try {
+        const r = await fetch('/api/router/test');
+        const d = await r.json();
+        if (d.login) {
+          result.innerHTML = `<span style="color:var(--green)">✅ Connected! Found ${d.devices} device(s)</span>`;
+          toast('✅ Router connection successful!', 'success');
+        } else if (d.ping) {
+          result.innerHTML = `<span style="color:var(--orange)">⚠️ Router reachable but login failed</span>`;
+          toast('⚠️ Wrong username or password', 'warn');
+        } else {
+          result.innerHTML = `<span style="color:var(--red)">❌ Cannot reach router at ${d.router_ip}</span>`;
+          toast('❌ Wrong Router IP address', 'error');
+        }
+        if (d.error) {
+          result.innerHTML += `<br><span style="font-size:11px;color:var(--td)">${d.error}</span>`;
+        }
+      } catch(e) {
+        result.innerHTML = `<span style="color:var(--red)">❌ Test failed: ${e.message}</span>`;
+      }
+      btn.disabled = false;
     }
 
     async function saveSettings() {
