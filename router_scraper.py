@@ -542,15 +542,9 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
             elif rtype == "B":
                 await _ensure_typeB(client, router_ip, config)
 
-                # Enable MAC/IP/Port filter with DROP default (= whitelist mode)
-                c, d = await _ubus_call(client, router_ip, _ubus_session,
-                    "zwrt_router.api", "router_set_macipport_filter_switch", {
-                        "macipport_filter_enable": 1,
-                        "default_firewall_policy": "DROP"
-                    })
-                logger.info(f"TYPE_B whitelist mode (DROP): code={c}")
-
-                # Remove old pctrl blocks for whitelisted MACs (unblock them)
+                # For TYPE_B: block unauthorized devices using per-device parental control
+                # NEVER use macipport_filter_switch DROP — it bricks the router
+                # Only unblock whitelisted MACs (remove their pctrl block if any)
                 for entry in whitelist:
                     mac = entry.get("mac", "").upper()
                     await _ubus_call(client, router_ip, _ubus_session,
@@ -558,6 +552,7 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
                         {"src_mac": mac})
                     logger.info(f"TYPE_B unblocked (whitelisted) {mac}")
 
+                logger.info("TYPE_B sync done — DNS Blocker handles unauthorized devices ✅")
                 return True
 
         except Exception as e:
@@ -674,14 +669,7 @@ async def disable_whitelist_mode() -> bool:
 
             elif rtype == "B":
                 await _ensure_typeB(client, router_ip, config)
-                # Remove DROP filter → back to ACCEPT (open)
-                c, d = await _ubus_call(client, router_ip, _ubus_session,
-                    "zwrt_router.api", "router_set_macipport_filter_switch", {
-                        "macipport_filter_enable": 0,
-                        "default_firewall_policy": "ACCEPT"
-                    })
-                logger.info(f"TYPE_B filter disabled (ACCEPT): code={c}")
-                # Also remove ALL pctrl blocks
+                # Only clear pctrl blocks — never touch macipport_filter_switch
                 _, macs_data = await _ubus_call(client, router_ip, _ubus_session,
                     "zwrt_router.api", "router_get_macs_setted_pctrl")
                 for mac in macs_data.get("macs", []):
