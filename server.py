@@ -1853,6 +1853,98 @@ async def router_test():
         result["error"] = f"Login failed: {str(e)}"
     return result
 
+@app.post("/api/router/restore")
+async def router_restore():
+    """Emergency: disable all blocking and restore open internet access."""
+    try:
+        # 1. Stop enforcer and DNS blocker
+        global _enforcer_task
+        if _enforcer_task and not _enforcer_task.done():
+            _enforcer_task.cancel()
+            _enforcer_task = None
+        if _dns_blocker.running:
+            _dns_blocker.stop()
+        _remove_pf_dns_redirect()
+        _remove_windows_firewall_rules()
+        _arp_spoofer.stop()
+
+        # 2. Restore router to open mode
+        ok = await disable_whitelist_mode()
+
+        # 3. Force reset router_scraper session so it re-detects on next call
+        import router_scraper as rs
+        rs._session_id   = None
+        rs._ubus_session = None
+        rs._router_type  = None
+        rs._client       = None
+
+        return {"status": "ok" if ok else "partial",
+                "message": "Router restored to open mode. All blocking disabled."}
+    except Exception as e:
+        logger.error(f"Emergency restore failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+@app.post("/api/router/reboot")
+async def router_reboot():
+    """Reboot the router."""
+    try:
+        config = get_config()
+        router_ip = config.get("routerIp", "192.168.1.1")
+        import httpx as _httpx
+
+        # Try TYPE_B (ubus) reboot first
+        try:
+            import router_scraper as rs
+            import hashlib
+
+            def sha256(s): return hashlib.sha256(s.encode()).hexdigest().upper()
+            headers = {
+                "Content-Type": "application/json",
+                "Origin":  f"https://{router_ip}",
+                "Referer": f"https://{router_ip}/",
+            }
+            NULL = "00000000000000000000000000000000"
+            async with _httpx.AsyncClient(base_url=f"https://{router_ip}",
+                                           verify=False, timeout=8.0) as c:
+                r = await c.post("/ubus/", headers=headers, json={
+                    "jsonrpc":"2.0","id":1,"method":"call",
+                    "params":[NULL,"zwrt_web","web_login_info",{}]})
+                sault   = r.json()["result"][1]["zte_web_sault"]
+                pw      = config.get("routerPass","")
+                hashed  = sha256(sha256(pw) + sault)
+                r2 = await c.post("/ubus/", headers=headers, json={
+                    "jsonrpc":"2.0","id":1,"method":"call",
+                    "params":[NULL,"zwrt_web","web_login",{"password":hashed}]})
+                session = r2.json()["result"][1]["ubus_rpc_session"]
+
+                # Try common reboot methods
+                rebooted = False
+                for svc, method in [
+                    ("zwrt_router.api", "router_reboot"),
+                    ("system", "reboot"),
+                    ("zwrt_router.api", "router_restart"),
+                ]:
+                    r3 = await c.post("/ubus/", headers=headers, json={
+                        "jsonrpc":"2.0","id":1,"method":"call",
+                        "params":[session, svc, method, {}]})
+                    result = r3.json().get("result", [])
+                    code = result[0] if isinstance(result, list) else result
+                    if code == 0:
+                        logger.info(f"Router reboot via {svc}.{method} ✅")
+                        rebooted = True
+                        break
+
+                if rebooted:
+                    return {"status": "ok", "message": "Router rebooting... wait 30 seconds then reconnect WiFi."}
+                else:
+                    return {"status": "partial", "message": "Reboot command sent but response unclear. Wait 30 seconds."}
+        except Exception as e:
+            logger.warning(f"TYPE_B reboot failed: {e}")
+            return {"status": "error", "message": f"Could not reboot: {e}. Try unplugging the router manually."}
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 @app.get("/api/devices/live")
 async def live_devices():
     """Get all connected devices with their authorization status."""

@@ -1603,7 +1603,7 @@
           <div class="card" style="margin-bottom:16px;border-left:4px solid #00c853">
             <div class="label" style="margin-bottom:8px">⚙️ Udhibiti wa Mfumo (System Control)</div>
             <div id="systemStatus" style="margin-bottom:12px;font-size:0.9em;color:#666">Hali: —</div>
-            <div style="display:flex;gap:12px">
+            <div style="display:flex;gap:12px;flex-wrap:wrap">
               <button class="btn success" id="washaBtn" onclick="washaSystem()"
                 style="background:#00c853;color:white;border:none;padding:12px 24px;border-radius:8px;font-weight:bold;cursor:pointer">
                 🚀 Washa System
@@ -1613,6 +1613,25 @@
                 ⛔ Zima System
               </button>
             </div>
+          </div>
+
+          <!-- Emergency Recovery Card -->
+          <div class="card" style="margin-bottom:16px;border-left:4px solid #ff6d00">
+            <div class="label" style="margin-bottom:8px;color:#ff6d00">🚨 Emergency Recovery</div>
+            <p style="font-size:13px;color:var(--td);margin-bottom:12px">
+              Use these if router is blocking internet or system is stuck.
+            </p>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+              <button class="btn" id="restoreRouterBtn" onclick="restoreRouter()"
+                style="background:#ff6d00;color:white;border:none;padding:10px 20px;border-radius:8px;font-weight:bold;cursor:pointer">
+                🔓 Restore Router (Open All)
+              </button>
+              <button class="btn" id="rebootRouterBtn" onclick="rebootRouter()"
+                style="background:#6d4c41;color:white;border:none;padding:10px 20px;border-radius:8px;font-weight:bold;cursor:pointer">
+                🔄 Reboot Router
+              </button>
+            </div>
+            <div id="emergencyStatus" style="margin-top:10px;font-size:13px"></div>
           </div>
           <div style="display:flex;gap:12px;margin-top:16px">
             <button class="btn primary" id="saveSettingsBtn" onclick="saveSettings()">Hifadhi Mipangilio</button>
@@ -2392,6 +2411,47 @@
       } catch (e) {
         statusEl.innerHTML = '❌ Hali: Hitilafu — ' + e.message;
       } finally { btn.disabled = false; btn.textContent = '⛔ Zima System'; }
+    }
+
+    async function restoreRouter() {
+      const btn = document.getElementById('restoreRouterBtn');
+      const statusEl = document.getElementById('emergencyStatus');
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:#ff6d00">⏳ Inafungua router... subiri...</span>';
+      try {
+        const r = await fetch('/api/router/restore', { method: 'POST' });
+        const d = await r.json();
+        if (d.status === 'ok' || d.status === 'partial') {
+          statusEl.innerHTML = '<span style="color:var(--green)">✅ ' + d.message + '</span>';
+          toast('✅ Router imefunguliwa — intaneti inarejea!', 'success');
+          document.getElementById('systemStatus').innerHTML = '⏸️ Hali: IMEZIMWA — hakuna ulinzi';
+        } else {
+          statusEl.innerHTML = '<span style="color:var(--red)">❌ ' + d.message + '</span>';
+          toast('❌ Imeshindikana: ' + d.message, 'error');
+        }
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--red)">❌ ' + e.message + '</span>';
+      } finally { btn.disabled = false; }
+    }
+
+    async function rebootRouter() {
+      const btn = document.getElementById('rebootRouterBtn');
+      const statusEl = document.getElementById('emergencyStatus');
+      if (!confirm('Reboot router? WiFi itakatika kwa sekunde 30-60.')) return;
+      btn.disabled = true;
+      statusEl.innerHTML = '<span style="color:#6d4c41">⏳ Inawasha upya router...</span>';
+      try {
+        const r = await fetch('/api/router/reboot', { method: 'POST' });
+        const d = await r.json();
+        if (d.status === 'ok') {
+          statusEl.innerHTML = '<span style="color:var(--green)">✅ ' + d.message + '</span>';
+          toast('🔄 Router inawaka upya — subiri sekunde 30-60', 'success');
+        } else {
+          statusEl.innerHTML = '<span style="color:var(--orange)">⚠️ ' + d.message + '</span>';
+        }
+      } catch (e) {
+        statusEl.innerHTML = '<span style="color:var(--red)">❌ ' + e.message + '</span>';
+      } finally { btn.disabled = false; btn.textContent = '🔄 Reboot Router'; }
     }
 
     // Check system status on page load
