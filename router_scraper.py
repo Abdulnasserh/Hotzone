@@ -611,22 +611,25 @@ async def purge_unauthorized_macs(allowed_macs: set) -> bool:
 
             elif rtype == "B":
                 await _ensure_typeB(client, router_ip, config)
-                # For TYPE_B: block every device NOT in allowed set via pctrl
-                _, arp_data = await _ubus_call(client, router_ip, _ubus_session,
-                    "zwrt_router.api", "router_get_arptable")
+                # For TYPE_B: add all currently connected unauthorized WiFi devices to deny list
+                # This blocks them at router level + DNS Blocker handles portal redirect
+                _, wlan_data = await _ubus_call(client, router_ip, _ubus_session,
+                    "zwrt_router.api", "router_wireless_access_list", {"start_id":1,"end_id":64})
                 allowed_upper = {m.upper() for m in allowed_macs}
-                for entry in arp_data.get("arptable", []):
-                    mac = entry.get("mac","").upper()
+                deny_list = []
+                for d in wlan_data.get("wireless_access_list_info", []):
+                    mac = d.get("mac_address","").upper()
                     if mac and mac not in allowed_upper:
-                        await _ubus_call(client, router_ip, _ubus_session,
-                            "zwrt_router.api", "router_set_pctrl", {
-                                "src_mac": mac,
-                                "weekdays": "1234567",
-                                "start_time": "0000",
-                                "stop_time": "2359",
-                                "enabled": 1,
-                                "action": "add"
-                            })
+                        deny_list.append(mac)
+                        logger.info(f"TYPE_B purging unauthorized {mac}")
+                
+                if deny_list:
+                    await _ubus_call(client, router_ip, _ubus_session,
+                        "zwrt_wlan", "set", {
+                            "main_2g": {"macfilter": "deny", "denymaclist": deny_list},
+                            "main_5g": {"macfilter": "deny", "denymaclist": deny_list}
+                        })
+                    logger.info(f"TYPE_B purged {len(deny_list)} unauthorized devices ✅")
                 logger.info("TYPE_B purged unauthorized MACs via pctrl ✅")
 
             return True
