@@ -127,12 +127,12 @@ def _get_deny_list(data) -> list:
 # scrape_devices
 # ---------------------------------------------------------------------------
 
-async def scrape_devices() -> list[dict]:
+async def scrape_devices(acquire_lock: bool = True) -> list[dict]:
     global _ubus_session
     config = _load_config()
     router_ip = _get_router_ip()
 
-    async with _lock:
+    async def _do_scrape():
         try:
             client = _get_client(router_ip)
             session = await _ensure_logged_in(client, router_ip, config)
@@ -192,6 +192,11 @@ async def scrape_devices() -> list[dict]:
             logger.error(f"scrape_devices failed: {e}")
             _ubus_session = None
             return []
+
+    if acquire_lock:
+        async with _lock:
+            return await _do_scrape()
+    return await _do_scrape()
 
 # ---------------------------------------------------------------------------
 # Deny-list helpers (the block/unblock mechanism)
@@ -329,7 +334,7 @@ async def purge_unauthorized_macs(allowed_macs: set) -> bool:
     global _ubus_session
     try:
         async with _lock:
-            devices = await scrape_devices()
+            devices = await scrape_devices(acquire_lock=False)
             allowed_upper = {m.upper() for m in allowed_macs}
             deny_list = []
             for d in devices:
