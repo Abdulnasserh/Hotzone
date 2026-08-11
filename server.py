@@ -1759,7 +1759,7 @@ async def system_start():
         return {"status": status, "allowed_count": len(active_macs), "whitelist_empty": len(active_macs) == 0}
     except Exception as e:
         logger.error(f"System start failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
 
 @app.post("/api/system/stop")
 async def system_stop():
@@ -1802,8 +1802,9 @@ _log_handler = None
 
 class _BufferHandler(logging.Handler):
     def emit(self, record):
+        from datetime import datetime as _dt
         _log_buffer.append({
-            "time": self.formatTime(record, "%H:%M:%S"),
+            "time": _dt.now().strftime("%H:%M:%S"),
             "level": record.levelname,
             "msg": record.getMessage()
         })
