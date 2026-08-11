@@ -1553,10 +1553,11 @@
         <div style="max-width:600px">
           <div class="card" style="margin-bottom:16px">
             <div class="label" style="margin-bottom:12px">Router Configuration</div>
-            <div class="form-group"><label>Router IP</label><input id="cfgRouterIp"></div>
-            <div class="form-row">
-              <div class="form-group"><label>Username</label><input id="cfgRouterUser"></div>
-              <div class="form-group"><label>Password</label><input id="cfgRouterPass" type="password"></div>
+            <div class="form-group"><label>Router IP Address</label><input id="cfgRouterIp" placeholder="e.g. 192.168.0.1"></div>
+            <div class="form-group">
+              <label>Router Password <span style="font-size:11px;color:var(--td)">(Username not needed — password only)</span></label>
+              <input id="cfgRouterPass" type="password" placeholder="Router admin password">
+              <input id="cfgRouterUser" type="hidden" value="admin">
             </div>
             <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
               <button class="btn primary" id="testRouterBtn" onclick="testRouterConnection()" style="flex:1">🔌 Test Router Connection</button>
