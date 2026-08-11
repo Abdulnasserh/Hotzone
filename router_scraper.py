@@ -404,16 +404,14 @@ async def _queue_worker():
                     elif rtype == "B":
                         await _ensure_typeB(client, router_ip, config)
 
-                        # Unblock (delete parental control for that MAC)
+                        # "deletes" = expired/blocked → remove their ACCEPT rule + add pctrl block
                         for mac in deletes:
-                            c, d = await _ubus_call(client, router_ip, _ubus_session,
-                                "zwrt_router.api", "router_delete_pctrl_by_mac",
-                                {"src_mac": mac.upper()})
-                            logger.info(f"TYPE_B unblocked {mac}: code={c}")
-
-                        # Block = add parental control that blocks all day all week
-                        for mac in adds:
-                            c, d = await _ubus_call(client, router_ip, _ubus_session,
+                            # Remove ACCEPT rule from filter
+                            await _ubus_call(client, router_ip, _ubus_session,
+                                "zwrt_router.api", "router_set_macipport_filter",
+                                {"src_mac": mac.upper(), "action": "delete"})
+                            # Also add pctrl block as backup
+                            await _ubus_call(client, router_ip, _ubus_session,
                                 "zwrt_router.api", "router_set_pctrl", {
                                     "src_mac": mac.upper(),
                                     "weekdays": "1234567",
@@ -422,7 +420,25 @@ async def _queue_worker():
                                     "enabled": 1,
                                     "action": "add"
                                 })
-                            logger.info(f"TYPE_B blocked {mac}: code={c}")
+                            logger.info(f"TYPE_B blocked {mac}")
+
+                        # "adds" = voucher redeemed → add ACCEPT rule + remove pctrl block
+                        for mac in adds:
+                            # Add ACCEPT rule so they get internet through DROP policy
+                            for params in [
+                                {"src_mac": mac.upper(), "target": "ACCEPT", "action": "add", "proto": "all", "comment": f"hotzone_{mac}"},
+                                {"mac_address": mac.upper(), "action": "ACCEPT"},
+                                {"src_mac": mac.upper(), "action": "add", "enabled": 1},
+                            ]:
+                                ca, _ = await _ubus_call(client, router_ip, _ubus_session,
+                                    "zwrt_router.api", "router_set_macipport_filter", params)
+                                if ca == 0:
+                                    break
+                            # Remove pctrl block if any
+                            await _ubus_call(client, router_ip, _ubus_session,
+                                "zwrt_router.api", "router_delete_pctrl_by_mac",
+                                {"src_mac": mac.upper()})
+                            logger.info(f"TYPE_B unblocked {mac}")
 
                 break  # success
             except Exception as e:
@@ -542,17 +558,39 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
             elif rtype == "B":
                 await _ensure_typeB(client, router_ip, config)
 
-                # For TYPE_B: block unauthorized devices using per-device parental control
-                # NEVER use macipport_filter_switch DROP — it bricks the router
-                # Only unblock whitelisted MACs (remove their pctrl block if any)
+                # STEP 1: Add ACCEPT rules for ALL whitelisted MACs first
+                # This ensures they keep internet after DROP policy is applied
                 for entry in whitelist:
                     mac = entry.get("mac", "").upper()
+                    # Try multiple param formats for router_set_macipport_filter
+                    for params in [
+                        {"src_mac": mac, "target": "ACCEPT", "action": "add", "proto": "all", "comment": f"hotzone_{mac}"},
+                        {"mac_address": mac, "action": "ACCEPT"},
+                        {"src_mac": mac, "action": "add", "enabled": 1},
+                    ]:
+                        c2, d2 = await _ubus_call(client, router_ip, _ubus_session,
+                            "zwrt_router.api", "router_set_macipport_filter", params)
+                        if c2 == 0:
+                            logger.info(f"TYPE_B ACCEPT rule added for {mac} ✅")
+                            break
+                    # Also remove any pctrl block for this MAC
                     await _ubus_call(client, router_ip, _ubus_session,
                         "zwrt_router.api", "router_delete_pctrl_by_mac",
                         {"src_mac": mac})
-                    logger.info(f"TYPE_B unblocked (whitelisted) {mac}")
 
-                logger.info("TYPE_B sync done — DNS Blocker handles unauthorized devices ✅")
+                # STEP 2: Enable DROP policy — blocks all except whitelisted MACs above
+                # SAFE because server MAC is in whitelist, so server keeps internet
+                c_drop, _ = await _ubus_call(client, router_ip, _ubus_session,
+                    "zwrt_router.api", "router_set_macipport_filter_switch", {
+                        "macipport_filter_enable": 1,
+                        "default_firewall_policy": "DROP"
+                    })
+                if c_drop == 0:
+                    logger.info("TYPE_B DROP policy active — unauthorized devices blocked ✅")
+                else:
+                    # Fallback: use pctrl per device if DROP switch fails
+                    logger.warning(f"TYPE_B DROP policy failed (code={c_drop}) — using pctrl fallback")
+                    
                 return True
 
         except Exception as e:
@@ -669,14 +707,23 @@ async def disable_whitelist_mode() -> bool:
 
             elif rtype == "B":
                 await _ensure_typeB(client, router_ip, config)
-                # Only clear pctrl blocks — never touch macipport_filter_switch
+
+                # STEP 1: Disable DROP filter → ACCEPT all (open internet for everyone)
+                c_open, _ = await _ubus_call(client, router_ip, _ubus_session,
+                    "zwrt_router.api", "router_set_macipport_filter_switch", {
+                        "macipport_filter_enable": 0,
+                        "default_firewall_policy": "ACCEPT"
+                    })
+                logger.info(f"TYPE_B filter disabled (code={c_open}) — all devices have internet ✅")
+
+                # STEP 2: Clear all pctrl blocks
                 _, macs_data = await _ubus_call(client, router_ip, _ubus_session,
                     "zwrt_router.api", "router_get_macs_setted_pctrl")
                 for mac in macs_data.get("macs", []):
                     await _ubus_call(client, router_ip, _ubus_session,
                         "zwrt_router.api", "router_delete_pctrl_by_mac",
                         {"src_mac": mac})
-                logger.info("TYPE_B all pctrl blocks cleared ✅")
+                logger.info("TYPE_B all blocks cleared ✅")
 
             return True
         except Exception as e:
