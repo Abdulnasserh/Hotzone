@@ -1411,12 +1411,33 @@ def _get_primary_iface():
     return "en0"
 
 def _get_server_mac():
+    """Return a MAC that belongs to this machine (uuid-based fallback)."""
     try:
         mac_num = uuid.getnode()
-        mac_str = ':'.join(("%012X" % mac_num)[i:i+2] for i in range(0, 12, 2))
-        return mac_str.upper()
+        return ':'.join(("%012X" % mac_num)[i:i+2] for i in range(0, 12, 2)).upper()
     except Exception:
         return ""
+
+def _get_server_macs():
+    """Return ALL local NIC MACs for this machine (cross-platform).
+    Critical for Windows PCs with WiFi + Ethernet: blocking the server PC's
+    own MAC would cut the admin's internet. We collect every local MAC so the
+    enforcer never blocks any of them."""
+    macs = set()
+    try:
+        if platform.system() == "Windows":
+            r = subprocess.run(["getmac", "/fo", "csv", "/nh"], capture_output=True, text=True, timeout=5)
+            for m in re.finditer(r'([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}', r.stdout):
+                macs.add(m.group(0).replace("-", ":").upper())
+        else:
+            r = subprocess.run(["ifconfig", "-a"], capture_output=True, text=True, timeout=5)
+            for m in re.finditer(r'([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}', r.stdout):
+                macs.add(m.group(0).upper())
+    except Exception:
+        pass
+    if not macs:
+        macs.add(_get_server_mac())
+    return macs
 
 def _add_pf_dns_redirect():
     if platform.system() != "Darwin":
@@ -2143,6 +2164,14 @@ async def expiry_enforcer():
                 if exp <= now:
                     mac = v.get("mac", "").upper()
                     if v["status"] == "active":
+                        # NEVER block the server PC itself — admin would lose internet
+                        server_macs = _get_server_macs()
+                        if mac and mac in server_macs:
+                            logger.warning(f"[enforcer] Skipping block for server MAC {mac} (voucher expired but server is protected)")
+                            v["status"] = "expired"
+                            changed = True
+                            continue
+
                         logger.info(f"[enforcer] Voucher expired for {mac} — removing from router")
                         v["status"] = "expired"
                         changed = True
