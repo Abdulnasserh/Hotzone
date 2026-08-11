@@ -95,7 +95,8 @@ $installDir = "$env:USERPROFILE\Desktop\HotZonePro-Build"
 if (Test-Path $installDir) {
     Write-Host "  Updating existing folder..." -ForegroundColor Yellow
     Push-Location $installDir
-    git pull origin main --force 2>&1 | Out-Null
+    git fetch origin main 2>&1 | Out-Null
+    git reset --hard origin/main 2>&1 | Out-Null
     Pop-Location
 } else {
     git clone "https://github.com/Abdulnasserh/Hotzone.git" $installDir
