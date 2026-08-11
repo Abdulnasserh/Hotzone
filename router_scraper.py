@@ -404,41 +404,29 @@ async def _queue_worker():
                     elif rtype == "B":
                         await _ensure_typeB(client, router_ip, config)
 
-                        # "deletes" = expired/blocked → remove their ACCEPT rule + add pctrl block
-                        for mac in deletes:
-                            # Remove ACCEPT rule from filter
-                            await _ubus_call(client, router_ip, _ubus_session,
-                                "zwrt_router.api", "router_set_macipport_filter",
-                                {"src_mac": mac.upper(), "action": "delete"})
-                            # Also add pctrl block as backup
-                            await _ubus_call(client, router_ip, _ubus_session,
-                                "zwrt_router.api", "router_set_pctrl", {
-                                    "src_mac": mac.upper(),
-                                    "weekdays": "1234567",
-                                    "start_time": "0000",
-                                    "stop_time": "2359",
-                                    "enabled": 1,
-                                    "action": "add"
-                                })
-                            logger.info(f"TYPE_B blocked {mac}")
+                        # Get current deny list from router
+                        _, wdata = await _ubus_call(client, router_ip, _ubus_session,
+                            "uci", "get", {"config":"wireless","section":"main_2g"})
+                        current_deny = wdata.get("values",{}).get("denymaclist",[])
+                        deny_set = {m.upper() for m in current_deny}
 
-                        # "adds" = voucher redeemed → add ACCEPT rule + remove pctrl block
+                        # "deletes" = voucher expired → ADD to deny list (block WiFi)
+                        for mac in deletes:
+                            deny_set.add(mac.upper())
+                            logger.info(f"TYPE_B blocked (expired) {mac}")
+
+                        # "adds" = voucher redeemed → REMOVE from deny list (allow WiFi)
                         for mac in adds:
-                            # Add ACCEPT rule so they get internet through DROP policy
-                            for params in [
-                                {"src_mac": mac.upper(), "target": "ACCEPT", "action": "add", "proto": "all", "comment": f"hotzone_{mac}"},
-                                {"mac_address": mac.upper(), "action": "ACCEPT"},
-                                {"src_mac": mac.upper(), "action": "add", "enabled": 1},
-                            ]:
-                                ca, _ = await _ubus_call(client, router_ip, _ubus_session,
-                                    "zwrt_router.api", "router_set_macipport_filter", params)
-                                if ca == 0:
-                                    break
-                            # Remove pctrl block if any
-                            await _ubus_call(client, router_ip, _ubus_session,
-                                "zwrt_router.api", "router_delete_pctrl_by_mac",
-                                {"src_mac": mac.upper()})
-                            logger.info(f"TYPE_B unblocked {mac}")
+                            deny_set.discard(mac.upper())
+                            logger.info(f"TYPE_B unblocked (redeemed) {mac}")
+
+                        new_deny = list(deny_set)
+                        code, _ = await _ubus_call(client, router_ip, _ubus_session,
+                            "zwrt_wlan", "set", {
+                                "main_2g": {"macfilter": "deny", "denymaclist": new_deny},
+                                "main_5g": {"macfilter": "deny", "denymaclist": new_deny}
+                            })
+                        logger.info(f"TYPE_B WiFi deny list updated: {len(deny_set)} blocked ✅")
 
                 break  # success
             except Exception as e:
@@ -558,40 +546,24 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
             elif rtype == "B":
                 await _ensure_typeB(client, router_ip, config)
 
-                # STEP 1: Add ACCEPT rules for ALL whitelisted MACs first
-                # This ensures they keep internet after DROP policy is applied
-                for entry in whitelist:
-                    mac = entry.get("mac", "").upper()
-                    # Try multiple param formats for router_set_macipport_filter
-                    for params in [
-                        {"src_mac": mac, "target": "ACCEPT", "action": "add", "proto": "all", "comment": f"hotzone_{mac}"},
-                        {"mac_address": mac, "action": "ACCEPT"},
-                        {"src_mac": mac, "action": "add", "enabled": 1},
-                    ]:
-                        c2, d2 = await _ubus_call(client, router_ip, _ubus_session,
-                            "zwrt_router.api", "router_set_macipport_filter", params)
-                        if c2 == 0:
-                            logger.info(f"TYPE_B ACCEPT rule added for {mac} ✅")
-                            break
-                    # Also remove any pctrl block for this MAC
-                    await _ubus_call(client, router_ip, _ubus_session,
-                        "zwrt_router.api", "router_delete_pctrl_by_mac",
-                        {"src_mac": mac})
+                # Get current deny list
+                _, wdata = await _ubus_call(client, router_ip, _ubus_session,
+                    "uci", "get", {"config":"wireless","section":"main_2g"})
+                current_deny = wdata.get("values",{}).get("denymaclist",[])
+                current_deny_upper = [m.upper() for m in current_deny]
 
-                # STEP 2: Enable DROP policy — blocks all except whitelisted MACs above
-                # SAFE because server MAC is in whitelist, so server keeps internet
-                c_drop, _ = await _ubus_call(client, router_ip, _ubus_session,
-                    "zwrt_router.api", "router_set_macipport_filter_switch", {
-                        "macipport_filter_enable": 1,
-                        "default_firewall_policy": "DROP"
+                # Build new deny list: remove whitelisted MACs (they should be allowed)
+                allowed_upper = {e.get("mac","").upper() for e in whitelist}
+                new_deny = [m for m in current_deny if m.upper() not in allowed_upper]
+
+                # Apply to both 2.4GHz and 5GHz
+                c2, _ = await _ubus_call(client, router_ip, _ubus_session,
+                    "zwrt_wlan", "set", {
+                        "main_2g": {"macfilter": "deny", "denymaclist": new_deny},
+                        "main_5g": {"macfilter": "deny", "denymaclist": new_deny}
                     })
-                if c_drop == 0:
-                    logger.info("TYPE_B DROP policy active — unauthorized devices blocked ✅")
-                else:
-                    # Fallback: use pctrl per device if DROP switch fails
-                    logger.warning(f"TYPE_B DROP policy failed (code={c_drop}) — using pctrl fallback")
-                    
-                return True
+                logger.info(f"TYPE_B whitelist synced via zwrt_wlan.set: code={c2} — {len(new_deny)} devices blocked ✅")
+                return c2 == [0] or c2 == 0
 
         except Exception as e:
             logger.error(f"sync_whitelist_to_router failed: {e}")
@@ -707,23 +679,13 @@ async def disable_whitelist_mode() -> bool:
 
             elif rtype == "B":
                 await _ensure_typeB(client, router_ip, config)
-
-                # STEP 1: Disable DROP filter → ACCEPT all (open internet for everyone)
+                # Clear deny list completely — everyone gets WiFi (Zima System)
                 c_open, _ = await _ubus_call(client, router_ip, _ubus_session,
-                    "zwrt_router.api", "router_set_macipport_filter_switch", {
-                        "macipport_filter_enable": 0,
-                        "default_firewall_policy": "ACCEPT"
+                    "zwrt_wlan", "set", {
+                        "main_2g": {"macfilter": "disable", "denymaclist": []},
+                        "main_5g": {"macfilter": "disable", "denymaclist": []}
                     })
-                logger.info(f"TYPE_B filter disabled (code={c_open}) — all devices have internet ✅")
-
-                # STEP 2: Clear all pctrl blocks
-                _, macs_data = await _ubus_call(client, router_ip, _ubus_session,
-                    "zwrt_router.api", "router_get_macs_setted_pctrl")
-                for mac in macs_data.get("macs", []):
-                    await _ubus_call(client, router_ip, _ubus_session,
-                        "zwrt_router.api", "router_delete_pctrl_by_mac",
-                        {"src_mac": mac})
-                logger.info("TYPE_B all blocks cleared ✅")
+                logger.info(f"TYPE_B WiFi filter cleared — all devices allowed ✅ (code={c_open})")
 
             return True
         except Exception as e:
