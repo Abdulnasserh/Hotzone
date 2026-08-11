@@ -185,9 +185,21 @@ class ServerGUI(ctk.CTk):
         self.stop_btn.configure(state="normal")
         self.import_btn.configure(state="disabled")
         self.status_label.configure(text="Server Status: RUNNING", text_color="#10B981")
-        
+
+        # Remind admin to press Washa System
+        self.after(3000, self._remind_washa)
+
         self.server_thread = threading.Thread(target=self.run_uvicorn, daemon=True)
         self.server_thread.start()
+
+    def _remind_washa(self):
+        messagebox.showwarning(
+            "⚠️ Kumbuka — Remember!",
+            "Server imeanza!\n\n"
+            "⚠️ WiFi bado iko WAZI — wateja wote wana internet bila kulipa!\n\n"
+            "Nenda kwenye Admin → Settings → Bonyeza 'Washa System'\n"
+            "ili kuzuia wateja wasio na voucher."
+        )
 
     def stop_server(self):
         self.start_btn.configure(state="normal")
