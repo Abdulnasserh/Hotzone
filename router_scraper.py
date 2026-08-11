@@ -118,11 +118,6 @@ async def _ensure_logged_in(client, router_ip, config):
         await _login(client, router_ip, config)
     return _ubus_session
 
-def _get_deny_list(data) -> list:
-    """denymaclist can be None when empty — always return a list."""
-    deny = data.get("denymaclist")
-    return deny if isinstance(deny, list) else []
-
 # ---------------------------------------------------------------------------
 # scrape_devices
 # ---------------------------------------------------------------------------
@@ -222,104 +217,42 @@ async def _apply_deny_list(deny_list: list):
     logger.error(f"zwrt_wlan.set failed: code={code} data={data}")
     return False
 
-async def _get_current_deny() -> list:
-    config = _load_config()
-    router_ip = _get_router_ip()
-    client = _get_client(router_ip)
-    session = await _ensure_logged_in(client, router_ip, config)
-
-    _, data = await _ubus_call(client, router_ip, session,
-                               "uci", "get", {"config": "wireless", "section": "main_2g"})
-    return _get_deny_list(data.get("values", {}))
-
 # ---------------------------------------------------------------------------
-# Public API: block / unblock (used by voucher redemption + expiry)
+# Public API: block / unblock (voucher redemption + expiry)
+#
+# Captive-portal model: internet access is controlled by the DNS Blocker +
+# ARP layer on the server PC, which re-reads the DB (whitelist + active
+# vouchers) every ~5 seconds. Voucher expiry/redeem is therefore automatic —
+# we do NOT touch the router deny list, because macfilter=deny would refuse
+# the customer's WiFi connection entirely (they couldn't reach the portal).
 # ---------------------------------------------------------------------------
-
-_pending_adds    = set()   # MACs to allow (voucher redeemed)
-_pending_deletes = set()   # MACs to block (voucher expired)
-_queue_task  = None
-_queue_event = asyncio.Event()
-
-def _start_queue_worker():
-    global _queue_task
-    if _queue_task is None or _queue_task.done():
-        _queue_task = asyncio.create_task(_queue_worker())
 
 async def block_device(mac: str) -> bool:
-    """Block a device (voucher expired)."""
-    _pending_deletes.add(mac.upper())
-    _start_queue_worker()
-    _queue_event.set()
-    logger.info(f"Queued block for {mac}")
+    """Voucher expired — internet revoked via the DNS layer (DB-driven)."""
+    logger.info(f"Voucher expired for {mac} — internet blocked via DNS layer (WiFi stays open)")
     return True
 
 async def unblock_device(mac: str) -> bool:
-    """Unblock a device (voucher redeemed)."""
-    _pending_adds.add(mac.upper())
-    _start_queue_worker()
-    _queue_event.set()
-    logger.info(f"Queued unblock for {mac}")
+    """Voucher redeemed — internet restored via the DNS layer (DB-driven)."""
+    logger.info(f"Voucher redeemed for {mac} — internet restored via DNS layer")
     return True
-
-async def _queue_worker():
-    global _pending_adds, _pending_deletes, _ubus_session
-    while True:
-        await _queue_event.wait()
-        _queue_event.clear()
-        await asyncio.sleep(0.5)
-
-        adds    = list(_pending_adds);    _pending_adds.clear()
-        deletes = list(_pending_deletes); _pending_deletes.clear()
-        if not adds and not deletes:
-            continue
-
-        for attempt in range(1, 4):
-            try:
-                async with _lock:
-                    current = await _get_current_deny()
-                    deny_set = {m.upper() for m in current}
-
-                    for mac in deletes:   # expired → block
-                        deny_set.add(mac.upper())
-                    for mac in adds:      # redeemed → allow
-                        deny_set.discard(mac.upper())
-
-                    ok = await _apply_deny_list(list(deny_set))
-                    if ok:
-                        break
-                    raise Exception("zwrt_wlan.set failed")
-            except Exception as e:
-                logger.error(f"Queue worker attempt {attempt}/3: {e}")
-                _ubus_session = None
-                if attempt < 3:
-                    await asyncio.sleep(2 * attempt)
-                else:
-                    _pending_adds.update(adds)
-                    _pending_deletes.update(deletes)
-                    async def _retry():
-                        await asyncio.sleep(15)
-                        _queue_event.set()
-                    asyncio.create_task(_retry())
 
 # ---------------------------------------------------------------------------
 # sync_whitelist_to_router — Washa System
 # ---------------------------------------------------------------------------
 
 async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
-    """Ensure whitelisted MACs are NOT in the deny list. Others stay blocked."""
+    """Washa System: keep the router WiFi OPEN so customers can CONNECT, then
+    control internet via the DNS Blocker + ARP layer (whitelist-driven).
+    The router deny list is NOT used because `macfilter=deny` refuses WiFi
+    association entirely — customers could never reach the voucher portal.
+    """
     global _ubus_session
-    if not whitelist:
-        logger.warning("sync_whitelist_to_router: empty whitelist — skipping")
-        return False
-
     try:
         async with _lock:
-            current = await _get_current_deny()
-            allowed_upper = {e.get("mac", "").upper() for e in whitelist}
-            new_deny = [m for m in current if m.upper() not in allowed_upper]
-            ok = await _apply_deny_list(new_deny)
-            logger.info(f"Whitelist synced: {len(new_deny)} blocked, {len(allowed_upper)} allowed")
+            ok = await _apply_deny_list([])   # macfilter=disable → everyone can connect
+            if ok:
+                logger.info(f"Whitelist synced: router WiFi open, {len(whitelist)} MACs controlled via DNS layer")
             return ok
     except Exception as e:
         logger.error(f"sync_whitelist_to_router failed: {e}")
@@ -331,22 +264,12 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
 # ---------------------------------------------------------------------------
 
 async def purge_unauthorized_macs(allowed_macs: set) -> bool:
-    global _ubus_session
-    try:
-        async with _lock:
-            devices = await scrape_devices(acquire_lock=False)
-            allowed_upper = {m.upper() for m in allowed_macs}
-            deny_list = []
-            for d in devices:
-                mac = d.get("mac", "").upper()
-                if mac and mac not in allowed_upper:
-                    deny_list.append(mac)
-            ok = await _apply_deny_list(deny_list)
-            logger.info(f"Purged unauthorized: {len(deny_list)} devices blocked")
-            return ok
-    except Exception as e:
-        logger.error(f"purge_unauthorized_macs failed: {e}")
-        return False
+    """NOT used for router blocking anymore — adding devices to the router's
+    denymaclist REFUSES their WiFi connection (they can't even join), which is
+    the wrong UX for a voucher system. Internet control is handled by the
+    DNS Blocker + ARP layer on the server PC instead. This keeps WiFi open."""
+    logger.info(f"purge_unauthorized_macs: skipping router block (WiFi stays open — DNS layer controls internet)")
+    return True
 
 # ---------------------------------------------------------------------------
 # disable_whitelist_mode — Zima System (open everything)
