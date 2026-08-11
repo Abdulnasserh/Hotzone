@@ -3,7 +3,6 @@ import hashlib
 import json
 import logging
 import asyncio
-import uuid
 import os
 from pathlib import Path
 
@@ -33,85 +32,46 @@ def _load_config() -> dict:
     return {}
 
 # ---------------------------------------------------------------------------
-# Router type detection
-# TYPE_A = old ZTE CPE: /cgi-bin/http.cgi with CMD-based JSON API
-# TYPE_B = new ZTE:     /ubus/ with JSON-RPC 2.0 (zwrt_web / zwrt_router.api)
+# TYPE_B (ubus) — ZTE 5G CPE at 192.168.0.1
+# Login: password only (no username), double SHA256
+# Block: zwrt_wlan.set with denymaclist
 # ---------------------------------------------------------------------------
 
-_router_type = None   # "A" | "B" | None (undetected)
-_session_id  = None   # TYPE_A session ID
-_ubus_session = None  # TYPE_B ubus_rpc_session
+_ubus_session = None
 _client = None
 _lock = asyncio.Lock()
 
-_UBUS_HEADERS = {
-    "Content-Type": "application/json",
-    "Origin": "https://",        # filled dynamically
-    "Referer": "https:///"       # filled dynamically
-}
-
 NULL_SESSION = "00000000000000000000000000000000"
 
-def _get_client(router_ip: str, https: bool = False):
-    global _client
-    scheme = "https" if https else "http"
-    if _client is None:
-        _client = httpx.AsyncClient(
-            base_url=f"{scheme}://{router_ip}",
-            timeout=10.0,
-            verify=False
-        )
-    return _client
+def _get_router_ip() -> str:
+    return _load_config().get("routerIp", "192.168.0.1")
 
-def _ubus_headers(router_ip: str):
+def _headers(router_ip: str) -> dict:
     return {
         "Content-Type": "application/json",
         "Origin":  f"https://{router_ip}",
         "Referer": f"https://{router_ip}/",
     }
 
-# ---------------------------------------------------------------------------
-# TYPE_A helpers  (original ZTE CPE — /cgi-bin/http.cgi)
-# ---------------------------------------------------------------------------
+def _get_client(router_ip: str):
+    global _client
+    if _client is None or str(_client.base_url) != f"https://{router_ip}":
+        if _client:
+            asyncio.get_event_loop().run_until_complete(_client.aclose())
+        _client = httpx.AsyncClient(
+            base_url=f"https://{router_ip}", verify=False, timeout=10.0,
+            follow_redirects=True)
+    return _client
 
-async def _login_typeA(client, config):
-    global _session_id
-    password = config.get("routerPass", "")
-    username = config.get("routerUser", "admin")
-
-    res = await client.post("/cgi-bin/http.cgi",
-        json={"cmd": 232, "method": "GET", "sessionId": "", "language": "en"})
-    token = res.json().get("token", "")
-    if not token:
-        raise Exception(f"TYPE_A: no token — {res.text[:80]}")
-
-    hashed_pw = hashlib.sha256((token + password).encode()).hexdigest()
-    def md5(s): return hashlib.md5(s.encode()).hexdigest()
-    setup_session = md5(str(uuid.uuid4())) + md5(str(uuid.uuid4()))
-
-    login_res = await client.post("/cgi-bin/http.cgi", json={
-        "cmd": 100, "method": "POST", "sessionId": setup_session,
-        "username": username, "passwd": hashed_pw,
-        "isAutoUpgrade": "0", "language": "en"
-    })
-    data = login_res.json()
-    if "AUTH" not in data or data.get("success") is False:
-        raise Exception(f"TYPE_A login rejected: {data}")
-    _session_id = data.get("sessionId")
-    logger.info("✅ Router TYPE_A session established")
-
-async def _ensure_typeA(client, config):
-    global _session_id
-    if not _session_id:
-        await _login_typeA(client, config)
-
-# ---------------------------------------------------------------------------
-# TYPE_B helpers  (new ZTE — /ubus/ JSON-RPC)
-# ---------------------------------------------------------------------------
+def sha256(s: str) -> str:
+    return hashlib.sha256(s.encode()).hexdigest().upper()
 
 async def _ubus_call(client, router_ip, session, service, method, params=None):
-    """Single JSON-RPC call on /ubus/ endpoint."""
-    headers = _ubus_headers(router_ip)
+    """Single JSON-RPC call. Returns (error_code, data).
+    Success: code == [0] or 0
+    Bad session: code == []
+    """
+    headers = _headers(router_ip)
     body = {"jsonrpc": "2.0", "id": 1, "method": "call",
             "params": [session, service, method, params or {}]}
     r = await client.post("/ubus/", headers=headers, json=body)
@@ -120,7 +80,10 @@ async def _ubus_call(client, router_ip, session, service, method, params=None):
         return result[0], result[1]
     return result, {}
 
-async def _login_typeB(client, router_ip, config):
+def _is_success(code) -> bool:
+    return code == 0 or code == [0]
+
+async def _login(client, router_ip, config):
     global _ubus_session
     password = config.get("routerPass", "")
 
@@ -128,199 +91,148 @@ async def _login_typeB(client, router_ip, config):
                                    "zwrt_web", "web_login_info")
     sault = data.get("zte_web_sault", "")
     if not sault:
-        raise Exception(f"TYPE_B: no sault — data={data}")
+        raise Exception(f"Login failed: no sault (code={code}, data={data})")
 
-    def sha256(s): return hashlib.sha256(s.encode()).hexdigest().upper()
     hashed = sha256(sha256(password) + sault)
-
     code, data = await _ubus_call(client, router_ip, NULL_SESSION,
                                    "zwrt_web", "web_login", {"password": hashed})
     session = data.get("ubus_rpc_session", "")
     if not session:
-        raise Exception(f"TYPE_B login failed: code={code} data={data}")
+        raise Exception(f"Login rejected: code={code}, data={data}")
     _ubus_session = session
-    logger.info("✅ Router TYPE_B (ubus) session established")
+    logger.info(f"✅ ZTE ubus login OK — session {session[:12]}...")
+    return session
 
-async def _ensure_typeB(client, router_ip, config):
+async def _ensure_logged_in(client, router_ip, config):
     global _ubus_session
     if not _ubus_session:
-        await _login_typeB(client, router_ip, config)
+        await _login(client, router_ip, config)
+        return _ubus_session
+
+    # Verify session still valid (cheap call)
+    code, _ = await _ubus_call(client, router_ip, _ubus_session,
+                               "zwrt_router.api", "router_get_user_list_num")
+    if code == [] or code == 1:
+        logger.info("Session expired — re-logging in")
+        _ubus_session = None
+        await _login(client, router_ip, config)
+    return _ubus_session
+
+def _get_deny_list(data) -> list:
+    """denymaclist can be None when empty — always return a list."""
+    deny = data.get("denymaclist")
+    return deny if isinstance(deny, list) else []
 
 # ---------------------------------------------------------------------------
-# Auto-detect router type
-# ---------------------------------------------------------------------------
-
-async def _detect_router_type(router_ip: str, config: dict):
-    """
-    Try TYPE_B (new ubus) first — if /ubus/ responds with sault, it's TYPE_B.
-    Otherwise fall back to TYPE_A (old /cgi-bin/http.cgi CMD API).
-    """
-    global _router_type, _client
-
-    # Try TYPE_B: HTTPS + ubus
-    try:
-        https_client = httpx.AsyncClient(
-            base_url=f"https://{router_ip}", timeout=6.0, verify=False)
-        headers = _ubus_headers(router_ip)
-        r = await https_client.post("/ubus/", headers=headers, json={
-            "jsonrpc": "2.0", "id": 1, "method": "call",
-            "params": [NULL_SESSION, "zwrt_web", "web_login_info", {}]
-        })
-        result = r.json().get("result", [])
-        if isinstance(result, list) and len(result) > 1:
-            if result[1].get("zte_web_sault"):
-                _router_type = "B"
-                _client = https_client
-                logger.info("🔍 Detected Router TYPE_B (ubus/HTTPS)")
-                return "B"
-        await https_client.aclose()
-    except Exception as e:
-        logger.debug(f"TYPE_B detection failed: {e}")
-
-    # Fall back to TYPE_A: HTTP + /cgi-bin/http.cgi
-    try:
-        http_client = httpx.AsyncClient(
-            base_url=f"http://{router_ip}", timeout=6.0)
-        r = await http_client.post("/cgi-bin/http.cgi", json={
-            "cmd": 232, "method": "GET", "sessionId": "", "language": "en"
-        })
-        if r.json().get("token"):
-            _router_type = "A"
-            _client = http_client
-            logger.info("🔍 Detected Router TYPE_A (cgi-bin/http.cgi)")
-            return "A"
-        await http_client.aclose()
-    except Exception as e:
-        logger.debug(f"TYPE_A detection failed: {e}")
-
-    logger.error(f"❌ Could not detect router type at {router_ip}")
-    return None
-
-async def _get_router(config):
-    """Return (client, router_ip, router_type) — detecting if needed."""
-    global _router_type, _client
-    router_ip = config.get("routerIp", "192.168.1.1")
-    if _router_type is None or _client is None:
-        _client = None
-        await _detect_router_type(router_ip, config)
-    return _client, router_ip, _router_type
-
-# ---------------------------------------------------------------------------
-# scrape_devices — unified API
+# scrape_devices
 # ---------------------------------------------------------------------------
 
 async def scrape_devices() -> list[dict]:
-    global _session_id, _ubus_session
+    global _ubus_session
     config = _load_config()
+    router_ip = _get_router_ip()
 
     async with _lock:
-        client, router_ip, rtype = await _get_router(config)
-        if not client:
-            return []
-
         try:
-            # ── TYPE_A ──────────────────────────────────────────────
-            if rtype == "A":
-                await _ensure_typeA(client, config)
-                res = await client.post("/cgi-bin/http.cgi",
-                    json={"cmd": 223, "method": "GET",
-                          "language": "en", "sessionId": _session_id})
-                data = res.json()
-                if data.get("message") == "NO_AUTH":
-                    raise Exception("NO_AUTH")
-                dhcp_list = data.get("dhcp_list_info", [])
+            client = _get_client(router_ip)
+            session = await _ensure_logged_in(client, router_ip, config)
 
-                mac_res = await client.post("/cgi-bin/http.cgi",
-                    json={"cmd": 23, "method": "GET",
-                          "language": "en", "sessionId": _session_id})
-                allowed_macs = {r.get("mac","").upper()
-                                for r in mac_res.json().get("datas", [])
-                                if r.get("enableRule")}
+            devices = []
 
-                devices = []
-                for item in dhcp_list:
-                    mac = item.get("mac", "").upper()
-                    if not mac or len(mac) != 17:
-                        continue
-                    devices.append({
-                        "mac": mac,
-                        "hostname": item.get("hostname", item.get("user", "unknown")),
-                        "ip": item.get("ip", ""),
-                        "router_allowed": mac in allowed_macs
-                    })
-                logger.info(f"TYPE_A scrape: {len(devices)} devices")
-                return devices
+            # WiFi clients
+            _, cnt = await _ubus_call(client, router_ip, session,
+                "zwrt_router.api", "router_get_user_list_num")
+            total = int(cnt.get("wireless_num", 0) or 0)
 
-            # ── TYPE_B ──────────────────────────────────────────────
-            elif rtype == "B":
-                await _ensure_typeB(client, router_ip, config)
-
-                devices = []
-
-                # Wireless clients (paginated)
-                _, cnt_data = await _ubus_call(client, router_ip, _ubus_session,
-                    "zwrt_router.api", "router_get_user_list_num")
-                total = cnt_data.get("wireless_num", 0) + cnt_data.get("lan_num", 0)
-
-                if total > 0:
-                    _, w_data = await _ubus_call(client, router_ip, _ubus_session,
-                        "zwrt_router.api", "router_wireless_access_list",
-                        {"start_id": 1, "end_id": max(total, 64)})
-                    for d in w_data.get("wireless_access_list_info", []):
-                        devices.append({
-                            "mac": d.get("mac_address","").upper(),
-                            "hostname": d.get("hostname", "unknown"),
-                            "ip": d.get("ip_address", ""),
-                            "router_allowed": True
-                        })
-
-                # LAN/Ethernet clients
-                _, l_data = await _ubus_call(client, router_ip, _ubus_session,
-                    "zwrt_router.api", "router_lan_access_list")
-                for d in l_data.get("lan_access_list_info", []):
-                    mac = d.get("mac_address", "").upper()
-                    if not any(x["mac"] == mac for x in devices):
+            if total > 0:
+                _, wdata = await _ubus_call(client, router_ip, session,
+                    "zwrt_router.api", "router_wireless_access_list",
+                    {"start_id": 1, "end_id": max(total, 64)})
+                for d in wdata.get("wireless_access_list_info", []):
+                    mac = (d.get("mac_address") or "").upper()
+                    if mac:
                         devices.append({
                             "mac": mac,
                             "hostname": d.get("hostname", "unknown"),
                             "ip": d.get("ip_address", ""),
-                            "router_allowed": True
                         })
 
-                # ARP table (extra IP→MAC mapping)
-                _, arp_data = await _ubus_call(client, router_ip, _ubus_session,
-                    "zwrt_router.api", "router_get_arptable")
-                for entry in arp_data.get("arptable", []):
-                    mac = entry.get("mac", "").upper()
-                    ip  = entry.get("ip", "")
+            # LAN / Ethernet clients
+            _, ldata = await _ubus_call(client, router_ip, session,
+                "zwrt_router.api", "router_lan_access_list")
+            for d in ldata.get("lan_access_list_info", []):
+                mac = (d.get("mac_address") or "").upper()
+                if mac and not any(x["mac"] == mac for x in devices):
+                    devices.append({
+                        "mac": mac,
+                        "hostname": d.get("hostname", "unknown"),
+                        "ip": d.get("ip_address", ""),
+                    })
+
+            # ARP table — extra IP→MAC mapping (key is 'mac')
+            _, arpdata = await _ubus_call(client, router_ip, session,
+                "zwrt_router.api", "router_get_arptable")
+            for entry in arpdata.get("arptable", []):
+                mac = (entry.get("mac") or "").upper()
+                ip = entry.get("ip", "")
+                if mac:
                     existing = next((d for d in devices if d["mac"] == mac), None)
                     if existing:
                         if not existing["ip"]:
                             existing["ip"] = ip
                     else:
                         devices.append({
-                            "mac": mac, "hostname": "unknown",
-                            "ip": ip, "router_allowed": False
+                            "mac": mac, "hostname": "unknown", "ip": ip,
                         })
 
-                logger.info(f"TYPE_B scrape: {len(devices)} devices")
-                return devices
+            logger.info(f"Scraped {len(devices)} devices from router")
+            return devices
 
         except Exception as e:
             logger.error(f"scrape_devices failed: {e}")
-            _session_id = None
             _ubus_session = None
-            _router_type = None
             return []
 
-    return []
-
 # ---------------------------------------------------------------------------
-# Background batch worker (block / unblock)
+# Deny-list helpers (the block/unblock mechanism)
 # ---------------------------------------------------------------------------
 
-_pending_adds    = set()
-_pending_deletes = set()
+async def _apply_deny_list(deny_list: list):
+    """Set the WiFi deny list on both 2.4G and 5G. Empty list = allow all."""
+    config = _load_config()
+    router_ip = _get_router_ip()
+    client = _get_client(router_ip)
+    session = await _ensure_logged_in(client, router_ip, config)
+
+    macfilter = "deny" if deny_list else "disable"
+    payload = {
+        "main_2g": {"macfilter": macfilter, "denymaclist": deny_list},
+        "main_5g": {"macfilter": macfilter, "denymaclist": deny_list},
+    }
+    code, data = await _ubus_call(client, router_ip, session,
+                                  "zwrt_wlan", "set", payload)
+    if _is_success(code):
+        logger.info(f"WiFi deny list updated: {len(deny_list)} blocked ✅")
+        return True
+    logger.error(f"zwrt_wlan.set failed: code={code} data={data}")
+    return False
+
+async def _get_current_deny() -> list:
+    config = _load_config()
+    router_ip = _get_router_ip()
+    client = _get_client(router_ip)
+    session = await _ensure_logged_in(client, router_ip, config)
+
+    _, data = await _ubus_call(client, router_ip, session,
+                               "uci", "get", {"config": "wireless", "section": "main_2g"})
+    return _get_deny_list(data.get("values", {}))
+
+# ---------------------------------------------------------------------------
+# Public API: block / unblock (used by voucher redemption + expiry)
+# ---------------------------------------------------------------------------
+
+_pending_adds    = set()   # MACs to allow (voucher redeemed)
+_pending_deletes = set()   # MACs to block (voucher expired)
 _queue_task  = None
 _queue_event = asyncio.Event()
 
@@ -329,111 +241,52 @@ def _start_queue_worker():
     if _queue_task is None or _queue_task.done():
         _queue_task = asyncio.create_task(_queue_worker())
 
-async def shutdown_scraper():
-    global _queue_task, _client
-    if _queue_task and not _queue_task.done():
-        _queue_task.cancel()
-    if _client:
-        await _client.aclose()
-        _client = None
+async def block_device(mac: str) -> bool:
+    """Block a device (voucher expired)."""
+    _pending_deletes.add(mac.upper())
+    _start_queue_worker()
+    _queue_event.set()
+    logger.info(f"Queued block for {mac}")
+    return True
+
+async def unblock_device(mac: str) -> bool:
+    """Unblock a device (voucher redeemed)."""
+    _pending_adds.add(mac.upper())
+    _start_queue_worker()
+    _queue_event.set()
+    logger.info(f"Queued unblock for {mac}")
+    return True
 
 async def _queue_worker():
+    global _pending_adds, _pending_deletes, _ubus_session
     while True:
         await _queue_event.wait()
         _queue_event.clear()
         await asyncio.sleep(0.5)
 
-        global _pending_adds, _pending_deletes, _session_id, _ubus_session
         adds    = list(_pending_adds);    _pending_adds.clear()
         deletes = list(_pending_deletes); _pending_deletes.clear()
         if not adds and not deletes:
             continue
 
-        config    = _load_config()
         for attempt in range(1, 4):
             try:
                 async with _lock:
-                    client, router_ip, rtype = await _get_router(config)
-                    if not client:
-                        raise Exception("No router connection")
+                    current = await _get_current_deny()
+                    deny_set = {m.upper() for m in current}
 
-                    # ── TYPE_A ──────────────────────────────────────
-                    if rtype == "A":
-                        await _ensure_typeA(client, config)
-                        get_res  = await client.post("/cgi-bin/http.cgi",
-                            json={"cmd": 23, "method": "GET",
-                                  "language": "en", "sessionId": _session_id})
-                        get_data = get_res.json()
-                        if get_data.get("message") == "NO_AUTH":
-                            raise Exception("NO_AUTH")
-                        token = get_data.get("token")
-                        rules = get_data.get("datas", [])
-                        changed = False
+                    for mac in deletes:   # expired → block
+                        deny_set.add(mac.upper())
+                    for mac in adds:      # redeemed → allow
+                        deny_set.discard(mac.upper())
 
-                        for mac in deletes:
-                            before = len(rules)
-                            rules = [r for r in rules
-                                     if r.get("mac","").upper() != mac.upper()]
-                            if len(rules) < before:
-                                changed = True
-                                logger.info(f"TYPE_A removed {mac}")
-
-                        existing = {r.get("mac","").upper() for r in rules}
-                        for mac in adds:
-                            mu = mac.upper()
-                            if mu not in existing:
-                                rules.append({"mac": mu, "enableRule": True,
-                                              "ippro": "ALL", "remark": "",
-                                              "enableLink": True})
-                                existing.add(mu); changed = True
-                                logger.info(f"TYPE_A added {mac}")
-
-                        if changed:
-                            await client.post("/cgi-bin/http.cgi",
-                                json={"cmd": 23, "method": "POST",
-                                      "language": "en",
-                                      "sessionId": _session_id,
-                                      "datas": rules, "token": token})
-                            await client.post("/cgi-bin/http.cgi",
-                                json={"cmd": 20, "method": "POST",
-                                      "language": "en",
-                                      "sessionId": _session_id, "token": token})
-                            logger.info("TYPE_A batch applied ✅")
-
-                    # ── TYPE_B ──────────────────────────────────────
-                    elif rtype == "B":
-                        await _ensure_typeB(client, router_ip, config)
-
-                        # Get current deny list from router
-                        _, wdata = await _ubus_call(client, router_ip, _ubus_session,
-                            "uci", "get", {"config":"wireless","section":"main_2g"})
-                        current_deny = wdata.get("values",{}).get("denymaclist",[])
-                        deny_set = {m.upper() for m in current_deny}
-
-                        # "deletes" = voucher expired → ADD to deny list (block WiFi)
-                        for mac in deletes:
-                            deny_set.add(mac.upper())
-                            logger.info(f"TYPE_B blocked (expired) {mac}")
-
-                        # "adds" = voucher redeemed → REMOVE from deny list (allow WiFi)
-                        for mac in adds:
-                            deny_set.discard(mac.upper())
-                            logger.info(f"TYPE_B unblocked (redeemed) {mac}")
-
-                        new_deny = list(deny_set)
-                        code, _ = await _ubus_call(client, router_ip, _ubus_session,
-                            "zwrt_wlan", "set", {
-                                "main_2g": {"macfilter": "deny", "denymaclist": new_deny},
-                                "main_5g": {"macfilter": "deny", "denymaclist": new_deny}
-                            })
-                        logger.info(f"TYPE_B WiFi deny list updated: {len(deny_set)} blocked ✅")
-
-                break  # success
+                    ok = await _apply_deny_list(list(deny_set))
+                    if ok:
+                        break
+                    raise Exception("zwrt_wlan.set failed")
             except Exception as e:
                 logger.error(f"Queue worker attempt {attempt}/3: {e}")
-                _session_id   = None
                 _ubus_session = None
-                _router_type  = None
                 if attempt < 3:
                     await asyncio.sleep(2 * attempt)
                 else:
@@ -445,335 +298,77 @@ async def _queue_worker():
                     asyncio.create_task(_retry())
 
 # ---------------------------------------------------------------------------
-# Public block / unblock API
-# ---------------------------------------------------------------------------
-
-async def block_device(mac: str) -> bool:
-    _pending_deletes.add(mac)   # "delete from allowed" = block
-    _start_queue_worker()
-    _queue_event.set()
-    logger.info(f"Queued block for {mac}")
-    return True
-
-async def unblock_device(mac: str) -> bool:
-    _pending_adds.add(mac)      # "add to allowed" = unblock
-    _start_queue_worker()
-    _queue_event.set()
-    logger.info(f"Queued unblock for {mac}")
-    return True
-
-# ---------------------------------------------------------------------------
-# sync_whitelist_to_router — called by Washa System
+# sync_whitelist_to_router — Washa System
 # ---------------------------------------------------------------------------
 
 async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
-    global _session_id, _ubus_session
-    config = _load_config()
-
+    """Ensure whitelisted MACs are NOT in the deny list. Others stay blocked."""
+    global _ubus_session
     if not whitelist:
-        logger.warning("sync_whitelist_to_router: empty list — skipping to prevent lockout")
+        logger.warning("sync_whitelist_to_router: empty whitelist — skipping")
         return False
 
-    async with _lock:
-        try:
-            client, router_ip, rtype = await _get_router(config)
-            if not client:
-                return False
-
-            # ── TYPE_A ──────────────────────────────────────────────
-            if rtype == "A":
-                await _ensure_typeA(client, config)
-
-                get_res  = await client.post("/cgi-bin/http.cgi",
-                    json={"cmd": 23, "method": "GET",
-                          "language": "en", "sessionId": _session_id})
-                get_data = get_res.json()
-                if get_data.get("message") == "NO_AUTH":
-                    _session_id = None
-                    await _ensure_typeA(client, config)
-                    get_res  = await client.post("/cgi-bin/http.cgi",
-                        json={"cmd": 23, "method": "GET",
-                              "language": "en", "sessionId": _session_id})
-                    get_data = get_res.json()
-
-                token = get_data.get("token")
-                rules = get_data.get("datas", [])
-
-                # Enable whitelist mode (CMD 28, 30)
-                for mode_cmd in [28, 30]:
-                    mode_res  = await client.post("/cgi-bin/http.cgi",
-                        json={"cmd": mode_cmd, "method": "GET",
-                              "language": "en", "sessionId": _session_id})
-                    mode_data = mode_res.json()
-                    if "datas" in mode_data:
-                        mt = mode_data.get("token")
-                        mr = mode_data["datas"]
-                        ch = False
-                        for r in mr:
-                            if r.get("acceptAll") is not False:
-                                r["acceptAll"] = False; ch = True
-                        if ch:
-                            await client.post("/cgi-bin/http.cgi",
-                                json={"cmd": mode_cmd, "method": "POST",
-                                      "language": "en", "sessionId": _session_id,
-                                      "datas": mr, "token": mt})
-                            logger.info(f"TYPE_A whitelist mode CMD {mode_cmd} ✅")
-
-                existing = {r.get("mac","").upper() for r in rules}
-                changed  = False
-                for entry in whitelist:
-                    mu = entry.get("mac","").upper()
-                    if mu not in existing:
-                        rules.append({"mac": mu, "enableRule": True,
-                                      "ippro": "ALL", "remark": "",
-                                      "enableLink": True})
-                        existing.add(mu); changed = True
-                        logger.info(f"TYPE_A sync added {mu}")
-
-                if changed:
-                    await client.post("/cgi-bin/http.cgi",
-                        json={"cmd": 23, "method": "POST", "language": "en",
-                              "sessionId": _session_id,
-                              "datas": rules, "token": token})
-
-                await client.post("/cgi-bin/http.cgi",
-                    json={"cmd": 20, "method": "POST", "language": "en",
-                          "sessionId": _session_id, "token": token})
-                logger.info("TYPE_A sync whitelist done ✅")
-                return True
-
-            # ── TYPE_B ──────────────────────────────────────────────
-            elif rtype == "B":
-                await _ensure_typeB(client, router_ip, config)
-
-                # Get current deny list
-                _, wdata = await _ubus_call(client, router_ip, _ubus_session,
-                    "uci", "get", {"config":"wireless","section":"main_2g"})
-                current_deny = wdata.get("values",{}).get("denymaclist",[])
-                current_deny_upper = [m.upper() for m in current_deny]
-
-                # Build new deny list: remove whitelisted MACs (they should be allowed)
-                allowed_upper = {e.get("mac","").upper() for e in whitelist}
-                new_deny = [m for m in current_deny if m.upper() not in allowed_upper]
-
-                # Apply to both 2.4GHz and 5GHz
-                c2, _ = await _ubus_call(client, router_ip, _ubus_session,
-                    "zwrt_wlan", "set", {
-                        "main_2g": {"macfilter": "deny", "denymaclist": new_deny},
-                        "main_5g": {"macfilter": "deny", "denymaclist": new_deny}
-                    })
-                logger.info(f"TYPE_B whitelist synced via zwrt_wlan.set: code={c2} — {len(new_deny)} devices blocked ✅")
-                return c2 == [0] or c2 == 0
-
-        except Exception as e:
-            logger.error(f"sync_whitelist_to_router failed: {e}")
-            _session_id   = None
-            _ubus_session = None
-            _router_type  = None
-            return False
-
-    return False
+    try:
+        async with _lock:
+            current = await _get_current_deny()
+            allowed_upper = {e.get("mac", "").upper() for e in whitelist}
+            new_deny = [m for m in current if m.upper() not in allowed_upper]
+            ok = await _apply_deny_list(new_deny)
+            logger.info(f"Whitelist synced: {len(new_deny)} blocked, {len(allowed_upper)} allowed ✅")
+            return ok
+    except Exception as e:
+        logger.error(f"sync_whitelist_to_router failed: {e}")
+        _ubus_session = None
+        return False
 
 # ---------------------------------------------------------------------------
-# purge_unauthorized_macs — remove non-whitelisted MACs from router
+# purge_unauthorized_macs — block all currently connected non-whitelisted
 # ---------------------------------------------------------------------------
 
 async def purge_unauthorized_macs(allowed_macs: set) -> bool:
-    global _session_id, _ubus_session
-    config = _load_config()
-
-    async with _lock:
-        try:
-            client, router_ip, rtype = await _get_router(config)
-            if not client:
-                return False
-
-            if rtype == "A":
-                await _ensure_typeA(client, config)
-                get_res  = await client.post("/cgi-bin/http.cgi",
-                    json={"cmd": 23, "method": "GET",
-                          "language": "en", "sessionId": _session_id})
-                get_data = get_res.json()
-                token    = get_data.get("token")
-                rules    = get_data.get("datas", [])
-                allowed_upper = {m.upper() for m in allowed_macs}
-                new_rules = [r for r in rules
-                             if r.get("mac","").upper() in allowed_upper]
-                if len(new_rules) < len(rules):
-                    await client.post("/cgi-bin/http.cgi",
-                        json={"cmd": 23, "method": "POST", "language": "en",
-                              "sessionId": _session_id,
-                              "datas": new_rules, "token": token})
-                    await client.post("/cgi-bin/http.cgi",
-                        json={"cmd": 20, "method": "POST", "language": "en",
-                              "sessionId": _session_id, "token": token})
-                    logger.info("TYPE_A purged unauthorized MACs ✅")
-
-            elif rtype == "B":
-                await _ensure_typeB(client, router_ip, config)
-                # For TYPE_B: add all currently connected unauthorized WiFi devices to deny list
-                # This blocks them at router level + DNS Blocker handles portal redirect
-                _, wlan_data = await _ubus_call(client, router_ip, _ubus_session,
-                    "zwrt_router.api", "router_wireless_access_list", {"start_id":1,"end_id":64})
-                allowed_upper = {m.upper() for m in allowed_macs}
-                deny_list = []
-                for d in wlan_data.get("wireless_access_list_info", []):
-                    mac = d.get("mac_address","").upper()
-                    if mac and mac not in allowed_upper:
-                        deny_list.append(mac)
-                        logger.info(f"TYPE_B purging unauthorized {mac}")
-                
-                if deny_list:
-                    await _ubus_call(client, router_ip, _ubus_session,
-                        "zwrt_wlan", "set", {
-                            "main_2g": {"macfilter": "deny", "denymaclist": deny_list},
-                            "main_5g": {"macfilter": "deny", "denymaclist": deny_list}
-                        })
-                    logger.info(f"TYPE_B purged {len(deny_list)} unauthorized devices ✅")
-                logger.info("TYPE_B purged unauthorized MACs via pctrl ✅")
-
-            return True
-        except Exception as e:
-            logger.error(f"purge_unauthorized_macs failed: {e}")
-            return False
+    global _ubus_session
+    try:
+        async with _lock:
+            devices = await scrape_devices()
+            allowed_upper = {m.upper() for m in allowed_macs}
+            deny_list = []
+            for d in devices:
+                mac = d.get("mac", "").upper()
+                if mac and mac not in allowed_upper:
+                    deny_list.append(mac)
+            ok = await _apply_deny_list(deny_list)
+            logger.info(f"Purged unauthorized: {len(deny_list)} devices blocked ✅")
+            return ok
+    except Exception as e:
+        logger.error(f"purge_unauthorized_macs failed: {e}")
+        return False
 
 # ---------------------------------------------------------------------------
-# disable_whitelist_mode — called by Zima System
+# disable_whitelist_mode — Zima System (open everything)
 # ---------------------------------------------------------------------------
 
 async def disable_whitelist_mode() -> bool:
-    global _session_id, _ubus_session
-    config = _load_config()
-
-    async with _lock:
-        try:
-            client, router_ip, rtype = await _get_router(config)
-            if not client:
-                return False
-
-            if rtype == "A":
-                await _ensure_typeA(client, config)
-                for mode_cmd in [28, 30]:
-                    mode_res  = await client.post("/cgi-bin/http.cgi",
-                        json={"cmd": mode_cmd, "method": "GET",
-                              "language": "en", "sessionId": _session_id})
-                    mode_data = mode_res.json()
-                    if "datas" in mode_data:
-                        mt = mode_data.get("token")
-                        mr = mode_data["datas"]
-                        ch = False
-                        for r in mr:
-                            if r.get("acceptAll") is not True:
-                                r["acceptAll"] = True; ch = True
-                        if ch:
-                            await client.post("/cgi-bin/http.cgi",
-                                json={"cmd": mode_cmd, "method": "POST",
-                                      "language": "en", "sessionId": _session_id,
-                                      "datas": mr, "token": mt})
-                            logger.info(f"TYPE_A allow-all CMD {mode_cmd} ✅")
-                get_res = await client.post("/cgi-bin/http.cgi",
-                    json={"cmd": 23, "method": "GET",
-                          "language": "en", "sessionId": _session_id})
-                token = get_res.json().get("token")
-                await client.post("/cgi-bin/http.cgi",
-                    json={"cmd": 20, "method": "POST", "language": "en",
-                          "sessionId": _session_id, "token": token})
-                logger.info("TYPE_A allow-all applied ✅")
-
-            elif rtype == "B":
-                await _ensure_typeB(client, router_ip, config)
-                # Clear deny list completely — everyone gets WiFi (Zima System)
-                c_open, _ = await _ubus_call(client, router_ip, _ubus_session,
-                    "zwrt_wlan", "set", {
-                        "main_2g": {"macfilter": "disable", "denymaclist": []},
-                        "main_5g": {"macfilter": "disable", "denymaclist": []}
-                    })
-                logger.info(f"TYPE_B WiFi filter cleared — all devices allowed ✅ (code={c_open})")
-
-            return True
-        except Exception as e:
-            logger.debug(f"disable_whitelist_mode failed (router may be offline): {e}")
-            return False
+    global _ubus_session
+    try:
+        async with _lock:
+            ok = await _apply_deny_list([])
+            logger.info("WiFi filter cleared — all devices allowed ✅")
+            return ok
+    except Exception as e:
+        logger.debug(f"disable_whitelist_mode failed (router offline?): {e}")
+        return False
 
 # ---------------------------------------------------------------------------
-# set_dhcp_dns — point clients to our DNS blocker
+# set_dhcp_dns — not possible on this router via API (access denied)
+# DNS Blocker + ARP spoofing handle interception instead
 # ---------------------------------------------------------------------------
 
 async def set_dhcp_dns(dns_ip: str) -> bool:
-    global _session_id, _ubus_session
-    config = _load_config()
-
-    async with _lock:
-        try:
-            client, router_ip, rtype = await _get_router(config)
-            if not client:
-                return False
-
-            if rtype == "A":
-                await _ensure_typeA(client, config)
-                # Try CMD 1
-                res = await client.post("/cgi-bin/http.cgi",
-                    json={"cmd": 1, "method": "GET",
-                          "language": "en", "sessionId": _session_id})
-                data  = res.json()
-                token = data.get("token")
-                datas = data.get("datas", [])
-                changed = False; dns_found = False
-                for entry in datas:
-                    for k in ("dnsPrimary", "dns1", "primaryDns"):
-                        if k in entry:
-                            dns_found = True
-                            if entry[k] != dns_ip:
-                                entry[k] = dns_ip; changed = True
-                    for k in ("dnsSecondary", "dns2", "secondaryDns"):
-                        if k in entry and entry[k] not in ("0.0.0.0", "", dns_ip):
-                            entry[k] = ""; changed = True
-                if not dns_found:
-                    raise Exception("No DNS key in CMD 1")
-                if changed:
-                    await client.post("/cgi-bin/http.cgi",
-                        json={"cmd": 1, "method": "POST", "language": "en",
-                              "sessionId": _session_id,
-                              "datas": datas, "token": token})
-                    logger.info(f"TYPE_A DHCP DNS → {dns_ip} ✅")
-                else:
-                    logger.info("TYPE_A DHCP DNS already set correctly")
-                return True
-
-            elif rtype == "B":
-                # TYPE_B: router DHCP DNS cannot be set via web API (access denied)
-                # The DNS Blocker + ARP spoof handle interception instead
-                logger.info("TYPE_B: DHCP DNS not settable via API — relying on DNS Blocker + ARP spoofing")
-                return True
-
-        except Exception as e:
-            logger.warning(f"set_dhcp_dns failed: {e}")
-            # Try CMD 219 fallback for TYPE_A
-            try:
-                res = await client.post("/cgi-bin/http.cgi",
-                    json={"cmd": 219, "method": "GET",
-                          "language": "en", "sessionId": _session_id})
-                data  = res.json()
-                token = data.get("token")
-                datas = data.get("datas", [])
-                changed = False
-                for entry in datas:
-                    for k in ("dnsPrimary", "dns1"):
-                        if k in entry and entry[k] != dns_ip:
-                            entry[k] = dns_ip; changed = True
-                if changed:
-                    await client.post("/cgi-bin/http.cgi",
-                        json={"cmd": 219, "method": "POST", "language": "en",
-                              "sessionId": _session_id,
-                              "datas": datas, "token": token})
-                    logger.info(f"TYPE_A CMD 219 DHCP DNS → {dns_ip} ✅")
-                return True
-            except Exception as e2:
-                logger.warning(f"set_dhcp_dns CMD 219 also failed: {e2}")
-                return False
+    logger.info("DHCP DNS not settable via API on this router — using DNS Blocker + ARP")
+    return True
 
 # ---------------------------------------------------------------------------
-# Misc
+# Cleanup
 # ---------------------------------------------------------------------------
 
 async def cleanup():
@@ -781,3 +376,6 @@ async def cleanup():
     if _client:
         await _client.aclose()
         _client = None
+
+async def shutdown_scraper():
+    await cleanup()
