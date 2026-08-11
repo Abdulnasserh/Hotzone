@@ -93,18 +93,15 @@ if (-not $gitExists) {
 Write-Host "[3/7] Downloading HotZone Pro source code..." -ForegroundColor Yellow
 $installDir = "$env:USERPROFILE\Desktop\HotZonePro-Build"
 if (Test-Path $installDir) {
-    Write-Host "  Updating existing folder..." -ForegroundColor Yellow
-    Push-Location $installDir
-    git fetch origin main 2>&1 | Out-Null
-    git reset --hard origin/main 2>&1 | Out-Null
-    Pop-Location
-} else {
-    git clone "https://github.com/Abdulnasserh/Hotzone.git" $installDir
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ERROR: Failed to download! Check internet connection." -ForegroundColor Red
-        pause
-        exit 1
-    }
+    Write-Host "  Removing old folder and re-downloading fresh..." -ForegroundColor Yellow
+    Remove-Item -Recurse -Force $installDir
+}
+Write-Host "  Downloading latest code..." -ForegroundColor Yellow
+git clone "https://github.com/Abdulnasserh/Hotzone.git" $installDir
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  ERROR: Failed to download! Check internet connection." -ForegroundColor Red
+    pause
+    exit 1
 }
 Set-Location $installDir
 Write-Host "  Downloaded to: $installDir" -ForegroundColor Green
