@@ -1467,7 +1467,9 @@ def _remove_pf_dns_redirect():
 # ---------------------------------------------------------------------------
 
 def _add_windows_firewall_rules():
-    """Allow inbound on ports 53/80, block outbound DNS bypass + DoH IPs."""
+    """Only allow INBOUND ports 53 and 80 so clients can reach DNS blocker and portal.
+    Never add outbound block rules — they only affect the server PC itself, not other devices,
+    and they break the server PC's own internet connection."""
     if platform.system() != "Windows":
         return False
     try:
@@ -1477,50 +1479,21 @@ def _add_windows_firewall_rules():
             subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=" + name],
                           capture_output=True, text=True)
 
-        # CRITICAL: Allow INBOUND on port 53 (so LAN devices can reach our DNS blocker)
+        # Allow INBOUND port 53 UDP — so WiFi clients can reach our DNS Blocker
         subprocess.run([
             "netsh", "advfirewall", "firewall", "add", "rule",
             "name=HotZone-AllowInboundDNS", "dir=in", "action=allow",
-            "protocol=UDP", "localport=53",
-            "enable=yes"
+            "protocol=UDP", "localport=53", "enable=yes"
         ], capture_output=True, text=True)
 
-        # CRITICAL: Allow INBOUND on port 80 (so LAN devices can reach the portal)
+        # Allow INBOUND port 80 TCP — so WiFi clients can reach the portal page
         subprocess.run([
             "netsh", "advfirewall", "firewall", "add", "rule",
             "name=HotZone-AllowInboundHTTP", "dir=in", "action=allow",
-            "protocol=TCP", "localport=80",
-            "enable=yes"
+            "protocol=TCP", "localport=80", "enable=yes"
         ], capture_output=True, text=True)
 
-        # Allow DNS from this server to upstream (8.8.8.8) — so our proxy works
-        subprocess.run([
-            "netsh", "advfirewall", "firewall", "add", "rule",
-            "name=HotZone-AllowLocalDNS", "dir=out", "action=allow",
-            "protocol=UDP", "remoteport=53",
-            "program=" + sys.executable,
-            "enable=yes"
-        ], capture_output=True, text=True)
-
-        # Block ALL other outbound DNS — prevents bypass via manual DNS
-        subprocess.run([
-            "netsh", "advfirewall", "firewall", "add", "rule",
-            "name=HotZone-BlockDNS", "dir=out", "action=block",
-            "protocol=UDP", "remoteport=53",
-            "enable=yes"
-        ], capture_output=True, text=True)
-
-        # Block known DoH server IPs (HTTPS port 443) to prevent DNS-over-HTTPS bypass
-        doh_ips = ",".join(_DOH_IPS_BLOCK)
-        subprocess.run([
-            "netsh", "advfirewall", "firewall", "add", "rule",
-            "name=HotZone-BlockDoH", "dir=out", "action=block",
-            "protocol=TCP", "remoteport=443",
-            "remoteip=" + doh_ips,
-            "enable=yes"
-        ], capture_output=True, text=True)
-
-        logger.info("🛡️ Windows Firewall: inbound DNS/HTTP allowed + outbound DNS/DoH blocked")
+        logger.info("🛡️ Windows Firewall: inbound DNS(53) + HTTP(80) allowed for clients")
         return True
     except Exception as e:
         logger.warning(f"⚠️ Windows Firewall rules failed: {e}")
