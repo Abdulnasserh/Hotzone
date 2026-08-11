@@ -1560,6 +1560,7 @@
             </div>
             <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
               <button class="btn primary" id="testRouterBtn" onclick="testRouterConnection()" style="flex:1">🔌 Test Router Connection</button>
+              <button class="btn" onclick="viewLogs()" style="background:#6366f1;color:white;border:none;padding:8px 14px;border-radius:6px;cursor:pointer">📋 View Logs</button>
               <span id="routerTestResult" style="font-size:13px"></span>
             </div>
           </div>
@@ -2468,6 +2469,22 @@
       } catch (e) {
         statusEl.innerHTML = '❌ Hali: Haiwezi kuanguka';
       }
+    }
+
+    async function viewLogs() {
+      try {
+        const r = await fetch('/api/logs');
+        const d = await r.json();
+        const logs = d.logs || [];
+        let html = '<div style="font-family:monospace;font-size:12px;max-height:400px;overflow-y:auto;background:#111;color:#eee;padding:12px;border-radius:8px">';
+        logs.forEach(l => {
+          const color = l.level === 'ERROR' ? '#ff6b6b' : l.level === 'WARNING' ? '#ffd93d' : '#6bcb77';
+          html += `<div><span style="color:#888">${l.time}</span> <span style="color:${color}">[${l.level}]</span> ${l.msg}</div>`;
+        });
+        html += '</div>';
+        const w = window.open('', '_blank', 'width=800,height=500');
+        w.document.write(`<html><body style="margin:0;background:#111">${html}</body></html>`);
+      } catch(e) { toast('❌ Cannot load logs', 'error'); }
     }
 
     async function testRouterConnection() {

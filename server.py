@@ -1713,6 +1713,7 @@ async def system_start():
         srv_mac = _get_server_mac()
         if srv_mac:
             active_macs.add(srv_mac)
+            logger.info(f"Server MAC: {srv_mac}")
 
         for v in vouchers:
             if v.get("status") == "active":
@@ -1721,23 +1722,26 @@ async def system_start():
                         active_macs.add(v["mac"].upper())
                 except Exception:
                     pass
+
+        logger.info(f"Washa System: {len(active_macs)} authorized MACs: {active_macs}")
         allowed_list = [{"mac": mac} for mac in active_macs]
+
         if active_macs:
+            logger.info("Syncing whitelist to router...")
             ok = await sync_whitelist_to_router(allowed_list)
+            logger.info(f"sync_whitelist_to_router result: {ok}")
             if ok:
                 await purge_unauthorized_macs(active_macs)
         else:
             ok = False
             logger.warning("⚠️ Whitelist iko tupu — hakuna MAC iliyoruhusiwa. Ongeza MAC yako kwenye whitelist kwanza!")
-        # Set router DHCP to use this server as DNS (so DNS blocker intercepts all queries)
+
+        # Set router DHCP to use this server as DNS
         config = get_config()
         server_ip = config.get("serverIp", "192.168.1.162")
         await set_dhcp_dns(server_ip)
-        # macOS pf redirect: force all network DNS traffic through our blocker
         _add_pf_dns_redirect()
-        # Windows Firewall: block DNS bypass + DoH
         _add_windows_firewall_rules()
-        # ARP Spoof (optional bonus layer — works without it)
         try:
             router_ip = config.get("routerIp", "192.168.1.1")
             _arp_spoofer.start(gateway_ip=router_ip, server_ip=server_ip)
@@ -1747,12 +1751,14 @@ async def system_start():
         if not _enforcer_task or _enforcer_task.done():
             _enforcer_task = asyncio.create_task(expiry_enforcer())
             logger.info("✅ Expiry enforcer started")
-        # Start DNS blocker if not already running
         if not _dns_blocker.running:
             _dns_blocker.start()
-        return {"status": "ok" if ok else "error", "allowed_count": len(active_macs), "whitelist_empty": len(active_macs) == 0}
+
+        status = "ok" if ok else "error"
+        logger.info(f"Washa System final status: {status}, allowed_count: {len(active_macs)}")
+        return {"status": status, "allowed_count": len(active_macs), "whitelist_empty": len(active_macs) == 0}
     except Exception as e:
-        logger.error(f"System start failed: {e}")
+        logger.error(f"System start failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/system/stop")
@@ -1789,6 +1795,34 @@ async def system_status():
         }
     except Exception as e:
         return {"router_connected": False, "device_count": 0, "error": str(e)}
+
+# In-memory log buffer for admin UI
+_log_buffer = []
+_log_handler = None
+
+class _BufferHandler(logging.Handler):
+    def emit(self, record):
+        _log_buffer.append({
+            "time": self.formatTime(record, "%H:%M:%S"),
+            "level": record.levelname,
+            "msg": record.getMessage()
+        })
+        if len(_log_buffer) > 200:
+            _log_buffer.pop(0)
+
+def _setup_log_buffer():
+    global _log_handler
+    if _log_handler is None:
+        _log_handler = _BufferHandler()
+        logging.getLogger("hotzone").addHandler(_log_handler)
+        logging.getLogger("router_scraper").addHandler(_log_handler)
+
+_setup_log_buffer()
+
+@app.get("/api/logs")
+async def get_logs():
+    """Return recent server logs for admin debugging."""
+    return {"logs": list(reversed(_log_buffer[-50:]))}
 
 @app.get("/api/router/test")
 async def router_test():
