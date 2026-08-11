@@ -61,10 +61,18 @@ MAIN_LOOP = None
 # Logging (Production Ready)
 # ---------------------------------------------------------------------------
 log_formatter = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
-log_handler = RotatingFileHandler(DATA_DIR / "hotzone.log", maxBytes=10*1024*1024, backupCount=5)
+log_handler = RotatingFileHandler(DATA_DIR / "hotzone.log", maxBytes=10*1024*1024, backupCount=5, encoding="utf-8")
 log_handler.setFormatter(log_formatter)
 
-logging.basicConfig(level=logging.INFO, handlers=[log_handler, logging.StreamHandler(sys.stdout)])
+class _SafeStreamHandler(logging.StreamHandler):
+    """StreamHandler that never crashes on unicode chars (Windows cp1252 console)."""
+    def emit(self, record):
+        try:
+            super().emit(record)
+        except Exception:
+            pass
+
+logging.basicConfig(level=logging.INFO, handlers=[log_handler, _SafeStreamHandler(sys.stdout)])
 logging.getLogger("httpx").setLevel(logging.WARNING) # Silence router API POST logs
 logger = logging.getLogger("hotzone")
 
@@ -1597,6 +1605,23 @@ class ArpSpoofer:
         except ImportError:
             logger.warning("⚠️ scapy not installed — ARP spoofing disabled. Install: pip install scapy")
             return
+
+        # On Windows, verify the packet driver (Npcap/WinPcap) is actually loaded —
+        # otherwise layer-2 sniffing/sending fails with a confusing loop error.
+        if platform.system() == "Windows":
+            try:
+                import scapy.config as sconf
+                from scapy.all import conf as scapy_conf
+                scapy_conf.use_pcap = True
+                lsock = scapy_conf.L2socket()
+                lsock.close()
+            except Exception:
+                logger.warning(
+                    "⚠️ ARP spoofing DISABLED: Npcap/WinPcap packet driver not active on this PC. "
+                    "DNS interception won't work. Fix: install Npcap (https://npcap.com) or run "
+                    "install.ps1 again after rebooting. Router-level deny list still works without it."
+                )
+                return
         
         # Enable IP forwarding so authorized traffic passes through to the real gateway
         self._enable_ip_forwarding()

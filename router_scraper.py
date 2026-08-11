@@ -100,7 +100,7 @@ async def _login(client, router_ip, config):
     if not session:
         raise Exception(f"Login rejected: code={code}, data={data}")
     _ubus_session = session
-    logger.info(f"✅ ZTE ubus login OK — session {session[:12]}...")
+    logger.info(f"ZTE ubus login OK - session {session[:12]}...")
     return session
 
 async def _ensure_logged_in(client, router_ip, config):
@@ -212,7 +212,7 @@ async def _apply_deny_list(deny_list: list):
     code, data = await _ubus_call(client, router_ip, session,
                                   "zwrt_wlan", "set", payload)
     if _is_success(code):
-        logger.info(f"WiFi deny list updated: {len(deny_list)} blocked ✅")
+        logger.info(f"WiFi deny list updated: {len(deny_list)} blocked")
         return True
     logger.error(f"zwrt_wlan.set failed: code={code} data={data}")
     return False
@@ -314,7 +314,7 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
             allowed_upper = {e.get("mac", "").upper() for e in whitelist}
             new_deny = [m for m in current if m.upper() not in allowed_upper]
             ok = await _apply_deny_list(new_deny)
-            logger.info(f"Whitelist synced: {len(new_deny)} blocked, {len(allowed_upper)} allowed ✅")
+            logger.info(f"Whitelist synced: {len(new_deny)} blocked, {len(allowed_upper)} allowed")
             return ok
     except Exception as e:
         logger.error(f"sync_whitelist_to_router failed: {e}")
@@ -337,7 +337,7 @@ async def purge_unauthorized_macs(allowed_macs: set) -> bool:
                 if mac and mac not in allowed_upper:
                     deny_list.append(mac)
             ok = await _apply_deny_list(deny_list)
-            logger.info(f"Purged unauthorized: {len(deny_list)} devices blocked ✅")
+            logger.info(f"Purged unauthorized: {len(deny_list)} devices blocked")
             return ok
     except Exception as e:
         logger.error(f"purge_unauthorized_macs failed: {e}")
@@ -352,7 +352,7 @@ async def disable_whitelist_mode() -> bool:
     try:
         async with _lock:
             ok = await _apply_deny_list([])
-            logger.info("WiFi filter cleared — all devices allowed ✅")
+            logger.info("WiFi filter cleared - all devices allowed")
             return ok
     except Exception as e:
         logger.debug(f"disable_whitelist_mode failed (router offline?): {e}")
