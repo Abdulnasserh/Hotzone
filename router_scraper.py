@@ -1,6 +1,5 @@
 import httpx
 import hashlib
-import json
 import logging
 import asyncio
 import os
@@ -32,9 +31,21 @@ def _load_config() -> dict:
     return {}
 
 # ---------------------------------------------------------------------------
-# TYPE_B (ubus) — ZTE 5G CPE at 192.168.0.1
+# TYPE_B (ubus) — ZTE 5G CPE at 192.168.0.1 (e.g. YAS shop router)
 # Login: password only (no username), double SHA256
-# Block: zwrt_wlan.set with denymaclist
+# Router-level block: zwrt_router.api router_set_macipport_filter
+#   - Rules only act when the macipport switch is ON. Reads go through
+#     uci.get (zwrt_router/firewall) — NOT router_get_macip* (doesn't exist).
+#   - Verified live against the shop router 2026-08:
+#       add    → {action:"add", src_mac, target:ACCEPT/DROP, src:"lan",
+#                 dest:"wan", family:"ipv4", proto:"all", enabled:1}
+#       delete → {action:"delete", section_id:[<id>]}   (MUST be a list)
+#       switch → {macipport_filter_enable:0/1, default_firewall_policy:"DROP"/"ACCEPT"}
+#   - DROP rules only gate src=lan → dest=wan (internet). LAN→LAN (portal
+#     server) still works, so voucher customers can reach the login page.
+# ---------------------------------------------------------------------------
+# Magnet hotzone rules we manage are tagged "hotzone_*" so we never touch
+# the admin's manually-created rules.
 # ---------------------------------------------------------------------------
 
 _ubus_session = None
@@ -51,6 +62,9 @@ def _headers(router_ip: str) -> dict:
         "Content-Type": "application/json",
         "Origin":  f"https://{router_ip}",
         "Referer": f"https://{router_ip}/",
+        # Same envelope the router's own web UI sends
+        "Z-Mode": "1",
+        "Z-Tag": "0",
     }
 
 def _get_client(router_ip: str):
@@ -194,66 +208,221 @@ async def scrape_devices(acquire_lock: bool = True) -> list[dict]:
     return await _do_scrape()
 
 # ---------------------------------------------------------------------------
-# Deny-list helpers (the block/unblock mechanism)
+# macipport_filter — the router-level block mechanism (VERIFIED live)
 # ---------------------------------------------------------------------------
 
-async def _apply_deny_list(deny_list: list):
-    """Set the WiFi deny list on both 2.4G and 5G. Empty list = allow all."""
-    config = _load_config()
-    router_ip = _get_router_ip()
-    client = _get_client(router_ip)
-    session = await _ensure_logged_in(client, router_ip, config)
+def _norm_mac(mac: str) -> str:
+    return (mac or "").upper().replace("-", ":")
 
-    macfilter = "deny" if deny_list else "disable"
-    payload = {
-        "main_2g": {"macfilter": macfilter, "denymaclist": deny_list},
-        "main_5g": {"macfilter": macfilter, "denymaclist": deny_list},
-    }
+async def _get_filter_switch(client, router_ip, session):
+    """Read the macipport switch state from uci config zwrt_router/firewall."""
     code, data = await _ubus_call(client, router_ip, session,
-                                  "zwrt_wlan", "set", payload)
-    if _is_success(code):
-        logger.info(f"WiFi deny list updated: {len(deny_list)} blocked")
-        return True
-    logger.error(f"zwrt_wlan.set failed: code={code} data={data}")
-    return False
+        "uci", "get", {"config": "zwrt_router", "section": "firewall"})
+    vals = data.get("values", {}) if isinstance(data, dict) else {}
+    return {
+        "enabled": vals.get("macipport_filter_enable", "0"),
+        "policy":  vals.get("macipport_filter_policy", "ACCEPT"),
+    }
+
+async def _get_macipport_rules(client, router_ip, session):
+    """Read existing macipport rules via uci.get. Returns list of
+    {section_id, src_mac, target}."""
+    code, data = await _ubus_call(client, router_ip, session,
+        "uci", "get", {"config": "firewall", "type": "rule",
+                       "match": {"zte_type": "zte_macipport_filter"}})
+    rules = []
+    vals = data.get("values", {}) if isinstance(data, dict) else {}
+    for sid, rv in vals.items():
+        smacs = rv.get("src_mac")
+        first_mac = _norm_mac(smacs[0]) if isinstance(smacs, list) and smacs else \
+                    _norm_mac(smacs) if isinstance(smacs, str) else ""
+        rules.append({
+            "section_id": sid,
+            "src_mac": first_mac,
+            "target": rv.get("target", ""),
+            "name": rv.get("name", ""),
+        })
+    return rules
+
+async def _set_filter_switch(client, router_ip, session, enable: int, policy: str):
+    code, data = await _ubus_call(client, router_ip, session,
+        "zwrt_router.api", "router_set_macipport_filter_switch",
+        {"macipport_filter_enable": enable, "default_firewall_policy": policy})
+    return _is_success(code), code, data
+
+async def _add_filter_rule(client, router_ip, session, mac: str, target: str, comment: str = "") -> bool:
+    """Add a per-MAC rule. target='ACCEPT' grants internet, 'DROP' cuts it.
+    src=lan → dest=wan so LAN-only (portal server) traffic stays working."""
+    code, data = await _ubus_call(client, router_ip, session,
+        "zwrt_router.api", "router_set_macipport_filter", {
+            "comment": comment,
+            "proto": "all",
+            "src": "lan",
+            "dest": "wan",
+            "src_mac": _norm_mac(mac),
+            "target": target,
+            "family": "ipv4",
+            "enabled": 1,
+            "action": "add",
+        })
+    ok = _is_success(code)
+    if not ok:
+        logger.error(f"add rule failed mac={mac} target={target}: code={code} data={data}")
+    return ok
+
+async def _delete_filter_rule(client, router_ip, session, section_id: str) -> bool:
+    """Delete a rule. section_id MUST be a list — single value returns code=[2]."""
+    code, data = await _ubus_call(client, router_ip, session,
+        "zwrt_router.api", "router_set_macipport_filter",
+        {"action": "delete", "section_id": [section_id]})
+    ok = _is_success(code)
+    if not ok:
+        logger.error(f"delete rule failed section_id={section_id}: code={code} data={data}")
+    return ok
+
+async def _delete_hotzone_rules(client, router_ip, session, keep_ids: set = None) -> int:
+    """Delete ALL remaining hotzone rules we own. The router re-indexes/IIHR
+    section IDs after each delete, so we re-read the list every iteration
+    instead of trusting a stale snapshot. Returns how many were deleted."""
+    deleted = 0
+    for _ in range(200):  # safety cap
+        rules = await _get_macipport_rules(client, router_ip, session)
+        target = None
+        for r in rules:
+            if str(r.get("name", "")).startswith(HOTZONE_TAG) and \
+               (keep_ids is None or r["section_id"] not in keep_ids):
+                target = r
+                break
+        if target is None:
+            break
+        if await _delete_filter_rule(client, router_ip, session, target["section_id"]):
+            deleted += 1
+    return deleted
 
 # ---------------------------------------------------------------------------
 # Public API: block / unblock (voucher redemption + expiry)
 #
-# Captive-portal model: internet access is controlled by the DNS Blocker +
-# ARP layer on the server PC, which re-reads the DB (whitelist + active
-# vouchers) every ~5 seconds. Voucher expiry/redeem is therefore automatic —
-# we do NOT touch the router deny list, because macfilter=deny would refuse
-# the customer's WiFi connection entirely (they couldn't reach the portal).
+# Router-level enforcement via macipport_filter (VERIFIED live):
+#  - block   → add DROP rule for the MAC (internet cut, WiFi stays on)
+#  - unblock → add ACCEPT rule for the MAC (whitelist mode) so internet flows
 # ---------------------------------------------------------------------------
 
+HOTZONE_TAG = "hotzone"   # tag used in rule comment; we only touch our own rules
+
+async def _replace_mac_rule(client, router_ip, session, mac: str, target: str) -> bool:
+    """Set a per-MAC rule to the desired target, replacing any existing
+    hotzone rule for the same MAC (so we never end up with conflicting
+    ACCEPT+DROP rules). Returns True on success."""
+    # Delete existing hotzone rules for this MAC
+    rules = await _get_macipport_rules(client, router_ip, session)
+    for r in rules:
+        if _norm_mac(r.get("src_mac")) == mac and str(r.get("name", "")).startswith(HOTZONE_TAG):
+            await _delete_filter_rule(client, router_ip, session, r["section_id"])
+
+    comment = f"{HOTZONE_TAG}_allow_{mac}" if target == "ACCEPT" else f"{HOTZONE_TAG}_block_{mac}"
+    return await _add_filter_rule(client, router_ip, session, mac, target, comment=comment)
+
 async def block_device(mac: str) -> bool:
-    """Voucher expired — internet revoked via the DNS layer (DB-driven)."""
-    logger.info(f"Voucher expired for {mac} — internet blocked via DNS layer (WiFi stays open)")
-    return True
+    """Voucher expired — set a router-level DROP rule for the MAC."""
+    mac = _norm_mac(mac)
+    config = _load_config()
+    router_ip = _get_router_ip()
+    try:
+        async with _lock:
+            client = _get_client(router_ip)
+            session = await _ensure_logged_in(client, router_ip, config)
+            ok = await _replace_mac_rule(client, router_ip, session, mac, "DROP")
+            if ok:
+                logger.info(f"Voucher expired for {mac} — DROP rule active, WiFi stays on")
+            return ok
+    except Exception as e:
+        logger.error(f"block_device failed: {e}")
+        _ubus_session = None
+        return False
 
 async def unblock_device(mac: str) -> bool:
-    """Voucher redeemed — internet restored via the DNS layer (DB-driven)."""
-    logger.info(f"Voucher redeemed for {mac} — internet restored via DNS layer")
-    return True
+    """Voucher redeemed — set an ACCEPT rule so the MAC gets internet
+    even when the router default policy is DROP (whitelist mode)."""
+    mac = _norm_mac(mac)
+    config = _load_config()
+    router_ip = _get_router_ip()
+    try:
+        async with _lock:
+            client = _get_client(router_ip)
+            session = await _ensure_logged_in(client, router_ip, config)
+            ok = await _replace_mac_rule(client, router_ip, session, mac, "ACCEPT")
+            if ok:
+                logger.info(f"Voucher redeemed for {mac} — ACCEPT rule active")
+            return ok
+    except Exception as e:
+        logger.error(f"unblock_device failed: {e}")
+        _ubus_session = None
+        return False
 
 # ---------------------------------------------------------------------------
 # sync_whitelist_to_router — Washa System
+#
+# Puts the router into WHITELIST / captive-portal mode:
+#   1. switch = ON, default policy = DROP  → nobody has internet by default
+#   2. add ACCEPT rule for every authorized MAC (whitelist + active vouchers)
+#   3. delete any stale hotzone DROP/ACCEPT rules (blocked MACs are now
+#      blocked by the DROP default alone)
+# WiFi stays OPEN so customers can connect and reach the portal page
+# (LAN→LAN is not filtered, only lan→wan internet).
 # ---------------------------------------------------------------------------
 
 async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
-    """Washa System: keep the router WiFi OPEN so customers can CONNECT, then
-    control internet via the DNS Blocker + ARP layer (whitelist-driven).
-    The router deny list is NOT used because `macfilter=deny` refuses WiFi
-    association entirely — customers could never reach the voucher portal.
-    """
     global _ubus_session
     try:
         async with _lock:
-            ok = await _apply_deny_list([])   # macfilter=disable → everyone can connect
-            if ok:
-                logger.info(f"Whitelist synced: router WiFi open, {len(whitelist)} MACs controlled via DNS layer")
-            return ok
+            config = _load_config()
+            router_ip = _get_router_ip()
+            client = _get_client(router_ip)
+            session = await _ensure_logged_in(client, router_ip, config)
+
+            # Desired state: switch ON + DROP default
+            ok, code, data = await _set_filter_switch(client, router_ip, session, 1, "DROP")
+            if not ok:
+                logger.error(f"switch ON/DROP failed: code={code} data={data}")
+                return False
+            logger.info("macipport switch ON, default policy DROP — WiFi open, internet gated")
+
+            # Desired ACCEPT set = all authorized MACs
+            desired = {_norm_mac(w.get("mac", "")) for w in whitelist if w.get("mac")}
+
+            # Existing hotzone rules we own
+            rules = await _get_macipport_rules(client, router_ip, session)
+            owned = [r for r in rules if str(r.get("name", "")).startswith(HOTZONE_TAG)]
+            kept_macs = {r["src_mac"] for r in owned if r["target"] == "ACCEPT"}
+
+            # Delete our stale rules (ACCEPT that's no longer desired; DROP no
+            # longer needed since default DROP covers them). Delete one-by-one
+            # with fresh reads so section-id re-indexing can't miss any.
+            for _ in range(200):
+                rules_now = await _get_macipport_rules(client, router_ip, session)
+                stale = None
+                for r in rules_now:
+                    if not str(r.get("name", "")).startswith(HOTZONE_TAG):
+                        continue
+                    # keep ACCEPT rules whose MAC is still desired
+                    if r["target"] == "ACCEPT" and r.get("src_mac") in desired:
+                        continue
+                    stale = r
+                    break
+                if stale is None:
+                    break
+                await _delete_filter_rule(client, router_ip, session, stale["section_id"])
+
+            # Add ACCEPT for any desired MAC not already accepted
+            for mac in sorted(desired):
+                if mac and mac not in kept_macs:
+                    ok2 = await _add_filter_rule(client, router_ip, session, mac,
+                                                 "ACCEPT", comment=f"{HOTZONE_TAG}_allow_{mac}")
+                    if not ok2:
+                        logger.warning(f"Could not ACCEPT {mac}")
+
+            logger.info(f"Whitelist synced: OK on switch DROP + {len(desired)} ACCEPT rules")
+            return True
     except Exception as e:
         logger.error(f"sync_whitelist_to_router failed: {e}")
         _ubus_session = None
@@ -264,12 +433,24 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
 # ---------------------------------------------------------------------------
 
 async def purge_unauthorized_macs(allowed_macs: set) -> bool:
-    """NOT used for router blocking anymore — adding devices to the router's
-    denymaclist REFUSES their WiFi connection (they can't even join), which is
-    the wrong UX for a voucher system. Internet control is handled by the
-    DNS Blocker + ARP layer on the server PC instead. This keeps WiFi open."""
-    logger.info(f"purge_unauthorized_macs: skipping router block (WiFi stays open — DNS layer controls internet)")
-    return True
+    """With whitelist mode active (default DROP), non-whitelisted devices are
+    already blocked by the router's DROP default. This is a no-op that
+    confirms the switch is still enforcing."""
+    global _ubus_session
+    try:
+        async with _lock:
+            config = _load_config()
+            router_ip = _get_router_ip()
+            client = _get_client(router_ip)
+            session = await _ensure_logged_in(client, router_ip, config)
+            state = await _get_filter_switch(client, router_ip, session)
+            enforcing = state.get("enabled") == "1" and state.get("policy") == "DROP"
+            logger.info(f"purge_unauthorized_macs: switch={state.get('enabled')} policy={state.get('policy')} "
+                        f"enforcing={enforcing}")
+            return enforcing
+    except Exception as e:
+        logger.debug(f"purge_unauthorized_macs failed (router offline?): {e}")
+        return False
 
 # ---------------------------------------------------------------------------
 # disable_whitelist_mode — Zima System (open everything)
@@ -279,11 +460,23 @@ async def disable_whitelist_mode() -> bool:
     global _ubus_session
     try:
         async with _lock:
-            ok = await _apply_deny_list([])
-            logger.info("WiFi filter cleared - all devices allowed")
+            config = _load_config()
+            router_ip = _get_router_ip()
+            client = _get_client(router_ip)
+            session = await _ensure_logged_in(client, router_ip, config)
+
+            # Delete our hotzone rules (re-read each iteration — the router
+            # re-indexes section ids on every delete, so a stale list can miss)
+            await _delete_hotzone_rules(client, router_ip, session)
+
+            # Switch OFF → default ACCEPT → everyone has internet
+            ok, _, _ = await _set_filter_switch(client, router_ip, session, 0, "ACCEPT")
+            if ok:
+                logger.info("Zima System: whitelist disabled, all devices allowed")
             return ok
     except Exception as e:
         logger.debug(f"disable_whitelist_mode failed (router offline?): {e}")
+        _ubus_session = None
         return False
 
 # ---------------------------------------------------------------------------

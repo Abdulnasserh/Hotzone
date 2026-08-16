@@ -2602,7 +2602,7 @@
 
         const ssid = cfg.wifiSSID || 'HotZone WiFi';
         const pwd = cfg.wifiPassword || '';
-        const serverIp = cfg.serverIp || '192.168.1.162';
+        const serverIp = cfg.serverIp || location.hostname;
 
         grid.innerHTML = codes.slice().reverse().map(c => `
       <div class="code-card" id="code-card-${c.code}" style="text-align:left; padding:0; overflow:hidden">

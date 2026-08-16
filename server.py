@@ -200,6 +200,34 @@ async def lifespan(app: FastAPI):
     MAIN_LOOP = asyncio.get_running_loop()
     logger.info("🔥 HotZone WiFi Voucher Server starting...")
 
+    # Auto-seed config on FIRST run so the system works with zero setup on any
+    # machine (esp. fresh Windows installs). Detects the NIC IP & gateway; user
+    # only needs to supply the router login (password) in Admin settings.
+    try:
+        cfg = get_config()
+        if not cfg:
+            detected = _detect_server_ip()
+            gw = _detect_gateway_ip()
+            seeds = {
+                "routerIp": gw,
+                "routerUser": "admin",
+                "routerPass": "",
+                "serverIp": detected,
+                "wifiSSID": "HotZone WiFi",
+                "wifiPassword": "",
+                "wifiSecurity": "WPA",
+                "adminPin": "2004",
+                "dailyCutoff": "",
+                "unblockPrice": "1000",
+            }
+            with _get_db() as conn:
+                conn.execute("DELETE FROM config")
+                conn.executemany("INSERT INTO config (key, value) VALUES (?, ?)",
+                                 [(k, str(v)) for k, v in seeds.items()])
+            logger.info(f"🌱 Seeded fresh config: routerIp={gw} serverIp={detected}")
+    except Exception as e:
+        logger.warning(f"Config auto-seed skipped: {e}")
+
     logger.info("ℹ️ Server passive — press 'Washa System' to enable DNS blocking + router whitelist")
 
     yield
@@ -962,9 +990,7 @@ async def qr_connect_image():
 @app.get("/api/qr/portal")
 async def qr_portal_image():
     """Generate QR code that opens the payment portal (Step 2: Scan to Pay)."""
-    config = get_config()
-    server_ip = config.get("serverIp", "192.168.1.162")
-    url = f"http://{server_ip}:8000/"
+    url = _portal_base_url()
 
     img_bytes = _generate_qr(url)
     return StreamingResponse(img_bytes, media_type="image/png")
@@ -973,9 +999,7 @@ async def qr_portal_image():
 @app.get("/api/qr/pay/{voucher_code}")
 async def qr_pay_image(voucher_code: str):
     """Generate QR code for a specific voucher code (scan to pay for this voucher)."""
-    config = get_config()
-    server_ip = config.get("serverIp", "192.168.1.162")
-    url = f"http://{server_ip}:8000/?code={voucher_code}"
+    url = f"{_portal_base_url()}?code={voucher_code}"
 
     img_bytes = _generate_qr(url)
     return StreamingResponse(img_bytes, media_type="image/png")
@@ -1039,7 +1063,6 @@ async def create_voucher_codes(req: VoucherCodeCreate):
     """Admin creates voucher codes. Each code is a unique string that
     a customer can scan to go directly to the payment page with pre-filled info."""
     config = get_config()
-    server_ip = config.get("serverIp", "192.168.1.162")
     codes = get_voucher_codes()
     created = []
 
@@ -1054,7 +1077,7 @@ async def create_voucher_codes(req: VoucherCodeCreate):
             "created": datetime.now().isoformat(),
             "used_by": None,
             "used_at": None,
-            "qr_url": f"http://{server_ip}:8000/?code={code}"
+            "qr_url": f"{_portal_base_url()}?code={code}"
         }
         codes.append(entry)
         created.append(entry)
@@ -1318,8 +1341,7 @@ class DnsBlocker:
                 # Block — return our server IP for all A queries so users land on portal
                 if qtype == QTYPE.A:
                     reply = request.reply()
-                    config = get_config()
-                    server_ip = config.get("serverIp", "192.168.1.162")
+                    server_ip = _get_server_ip()
                     reply.add_answer(RR(qname + ".", QTYPE.A, rdata=A(server_ip), ttl=60))
                     self.sock.sendto(reply.pack(), addr)
         except Exception:
@@ -1418,6 +1440,111 @@ def _get_primary_iface():
         pass
     return "en0"
 
+def _detect_server_ip() -> str:
+    """Auto-detect this machine's primary LAN IP without hard-coding anything.
+    Cross-platform and works whether config has serverIp set or not."""
+    # 1. Fast native lookup per platform
+    try:
+        if platform.system() == "Windows":
+            r = subprocess.run(["ipconfig"], capture_output=True, text=True, timeout=3)
+            # IPv4 lines like: "IPv4 Address. . . . . . . . . . . : 192.168.0.153"
+            for line in r.stdout.splitlines():
+                if "IPv4" in line and ":" in line:
+                    ip = line.split(":")[-1].strip().split(" ")[-1].strip()
+                    if ip and ip.count(".") == 3 and not ip.startswith("169.254"):
+                        return ip
+        elif platform.system() == "Darwin":
+            r = subprocess.run(["ipconfig", "getifaddr", _get_primary_iface()],
+                               capture_output=True, text=True, timeout=3)
+            ip = r.stdout.strip()
+            if ip and ip.count(".") == 3:
+                return ip
+            r = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=3)
+            for m in re.finditer(r'inet (\d+\.\d+\.\d+\.\d+)', r.stdout):
+                ip = m.group(1)
+                if not ip.startswith("169.254") and not ip.startswith("127."):
+                    return ip
+        else:
+            r = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=3)
+            for tok in r.stdout.split():
+                if tok.count(".") == 3 and not tok.startswith("169.254"):
+                    return tok
+    except Exception:
+        pass
+    # 2. Socket trick: open UDP route towards gateway — OS picks our real NIC IP
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(1)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and ip.count(".") == 3 and not ip.startswith("169.254"):
+            return ip
+    except Exception:
+        pass
+    # 3. Last resort: match any RFC1918 candidate from ifconfig/ipconfig
+    try:
+        rx = subprocess.run(["ipconfig" if platform.system() == "Windows" else "ifconfig"],
+                            capture_output=True, text=True, timeout=3)
+        for m in re.finditer(r'((?:192\.168\.|10\.|172\.(?:1[6-9]|2\d|3[01])\.).*?)\s|inet\s+(\d+\.\d+\.\d+\.\d+)',
+                             rx.stdout):
+            pass  # handled by per-platform branch above
+        for m in re.finditer(r'\b(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b',
+                             rx.stdout):
+            return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+def _get_server_ip() -> str:
+    """Effective server IP: config value if set, otherwise auto-detect."""
+    cfg = get_config()
+    ip = (cfg.get("serverIp") or "").strip()
+    if ip and ip.count(".") == 3:
+        return ip
+    return _detect_server_ip()
+
+def _detect_gateway_ip() -> str:
+    """Auto-detect the default gateway (router) IP — cross-platform."""
+    try:
+        if platform.system() == "Windows":
+            r = subprocess.run(["ipconfig"], capture_output=True, text=True, timeout=3)
+            for line in r.stdout.splitlines():
+                if "Gateway" in line and ":" in line:
+                    ip = line.split(":")[-1].strip()
+                    if ip and ip.count(".") == 3:
+                        return ip
+            r = subprocess.run(["route", "print", "0.0.0.0"], capture_output=True, text=True, timeout=3)
+            for m in re.finditer(r'0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)', r.stdout):
+                return m.group(1)
+        else:
+            r = subprocess.run(["route", "-n", "get", "default"], capture_output=True, text=True, timeout=3)
+            for line in r.stdout.splitlines():
+                if "gateway:" in line:
+                    ip = line.split(":")[1].strip()
+                    if ip and ip.count(".") == 3:
+                        return ip
+    except Exception:
+        pass
+    try:
+        rx = subprocess.run(["ipconfig" if platform.system() == "Windows" else "ifconfig"],
+                            capture_output=True, text=True, timeout=3)
+        for m in re.finditer(r'\d+\.\d+\.\d+\.1\b', rx.stdout):
+            return m.group(0)
+    except Exception:
+        pass
+    return "192.168.1.1"
+
+_CURRENT_PORT = 80  # updated at startup to the port uvicorn actually binds
+
+def _portal_base_url() -> str:
+    """http://<ip>[:port]/ — uses the REAL bound port, never hard-codes 8000."""
+    ip = _get_server_ip()
+    port = _CURRENT_PORT
+    if port == 80:
+        return f"http://{ip}/"
+    return f"http://{ip}:{port}/"
+
 def _get_server_mac():
     """Return a MAC that belongs to this machine (uuid-based fallback)."""
     try:
@@ -1453,7 +1580,7 @@ def _add_pf_dns_redirect():
     iface = _get_primary_iface()
     rule = (
         f"rdr pass on {iface} inet proto udp from any to any port 53 -> 127.0.0.1 port 53\n"
-        f"rdr pass on {iface} inet proto tcp from any to any port 80 -> 127.0.0.1 port 8000\n"
+        f"rdr pass on {iface} inet proto tcp from any to any port 80 -> 127.0.0.1 port 80\n"
     )
     try:
         default_conf = "/etc/pf.conf"
@@ -1470,7 +1597,7 @@ def _add_pf_dns_redirect():
             logger.warning(f"⚠️ pf base load: {r.stderr.strip()}")
         r2 = subprocess.run(["pfctl", "-a", "com.hotzone.hotspot", "-f", "-"], input=rule, text=True, capture_output=True)
         if r2.returncode == 0:
-            logger.info(f"📡 pf redirect active on {iface}: UDP 53->53, TCP 80->8000")
+            logger.info(f"📡 pf redirect active on {iface}: UDP 53->53, TCP 80->80")
             return True
         else:
             logger.warning(f"⚠️ pf anchor load failed: {r2.stderr.strip()}")
@@ -1705,8 +1832,7 @@ class ArpSpoofer:
                     # Unauthorized — respond with server IP (redirect to portal)
                     try:
                         qname = pkt[DNSQR].qname.decode() if pkt[DNSQR].qname else ""
-                        config = get_config()
-                        server_ip = config.get("serverIp", "192.168.1.162")
+                        server_ip = _get_server_ip()
                         
                         spoofed = (IP(dst=src_ip, src=pkt[IP].dst) /
                                    UDP(dport=pkt[UDP].sport, sport=53) /
@@ -1784,15 +1910,19 @@ async def system_start():
 
         # Set router DHCP to use this server as DNS
         config = get_config()
-        server_ip = config.get("serverIp", "192.168.1.162")
+        server_ip = _get_server_ip()
         await set_dhcp_dns(server_ip)
         _add_pf_dns_redirect()
         _add_windows_firewall_rules()
-        try:
-            router_ip = config.get("routerIp", "192.168.1.1")
-            _arp_spoofer.start(gateway_ip=router_ip, server_ip=server_ip)
-        except Exception as e:
-            logger.info(f"ℹ️ ARP spoofing unavailable (not critical): {e}")
+        # NOTE: ARP spoofing is DELIBERATELY disabled. It contradicts the
+        # router-DROP gate: if we ARP-spoof + IP-forward, every client's packets
+        # leave via the SERVER's own MAC (which is ACCEPTed), so the router's
+        # DROP never sees the real client MAC → unauthorized phones get internet.
+        # With the router DROP gate, customers reach the portal by typing the
+        # server IP manually (LAN→LAN is NOT gated by DROP, only lan→wan is).
+        if _arp_spoofer.running:
+            _arp_spoofer.stop()
+            logger.info("ℹ️ ARP spoofing disabled — using router DROP gate (manual portal entry)")
         global _enforcer_task
         if not _enforcer_task or _enforcer_task.done():
             _enforcer_task = asyncio.create_task(expiry_enforcer())
@@ -2008,7 +2138,7 @@ async def live_devices():
         whitelist = get_whitelist()
         vouchers = get_vouchers()
         config = get_config()
-        server_ip = config.get("serverIp", "192.168.1.162")
+        server_ip = _get_server_ip()
         nicknames = {}
         try:
             db = _get_db()
@@ -2020,6 +2150,10 @@ async def live_devices():
 
         # Build set of authorized MACs
         authorized_macs = {w["mac"].upper() for w in whitelist}
+        # The server PC itself always has access (auto-whitelisted to prevent
+        # admin lockout) — reflect that in the UI instead of showing "BLOCKED"
+        for sm in _get_server_macs():
+            authorized_macs.add(sm)
         for v in vouchers:
             if v.get("status") == "active":
                 try:
@@ -2158,7 +2292,12 @@ async def expiry_enforcer():
                                 v["expires"] = now.isoformat()
                                 changed = True
                                 active_count += 1
-                                await block_device(mac)
+                                # NEVER block a permanent-whitelist device — it has
+                                # standing access regardless of voucher status
+                                if mac and mac not in verified_active_macs:
+                                    await block_device(mac)
+                                else:
+                                    logger.info(f"[cutoff] Skipping block for whitelisted MAC {mac}")
                                 
                                 devices_store = get_devices_store()
                                 for ds in devices_store:
@@ -2178,6 +2317,14 @@ async def expiry_enforcer():
                     logger.warning(f"Cutoff check error: {e}")
 
             # ── Normal per-voucher expiry ──
+            # Precompute how many ACTIVE vouchers each MAC holds so that a MAC
+            # with ≥1 remaining active voucher never gets router-blocked.
+            active_voucher_counts: dict[str, int] = {}
+            for v in vouchers:
+                if v.get("status") == "active":
+                    v_mac = v.get("mac", "").upper()
+                    active_voucher_counts[v_mac] = active_voucher_counts.get(v_mac, 0) + 1
+
             for v in vouchers:
                 if v.get("status") not in ("active", "expired"):
                     continue
@@ -2206,7 +2353,18 @@ async def expiry_enforcer():
                             "reason": "voucher_expired"
                         })
                         
-                        await block_device(mac)
+                        # NEVER block a permanent-whitelist device — it has
+                        # standing access regardless of voucher status.
+                        # Decrement THIS voucher from the active count, then
+                        # keep access only if another active voucher remains.
+                        active_voucher_counts[mac] = active_voucher_counts.get(mac, 0) - 1
+                        remaining_active = active_voucher_counts.get(mac, 0)
+                        if mac and mac not in verified_active_macs and remaining_active <= 0:
+                            await block_device(mac)
+                        else:
+                            logger.info(f"[enforcer] Skipping block for {mac} "
+                                        f"(permanent whitelist={mac in verified_active_macs}, "
+                                        f"remaining active vouchers={remaining_active})")
 
                         devices_store = get_devices_store()
                         for ds in devices_store:
@@ -2214,9 +2372,6 @@ async def expiry_enforcer():
                                 ds["status"] = "expired"
                                 break
                         save_devices_store(devices_store)
-                elif v["status"] == "active":
-                    v_mac = v["mac"].upper()
-                    verified_active_macs.add(v_mac)
 
             if changed:
                 save_vouchers(vouchers)
@@ -2278,10 +2433,12 @@ if __name__ == "__main__":
     # 3. Start Web Portal (HTTP-only) on Port 80
     logger.info("🚀 Starting Web Portal...")
     try:
+        _CURRENT_PORT = 80
         threading.Thread(target=_open_admin, args=(80,), daemon=True).start()
         uvicorn.run(app, host="0.0.0.0", port=80, log_level="info", reload=False)
     except Exception as e:
         logger.error(f"Failed to start on Port 80: {e}")
         logger.info("Retrying on 8000...")
+        _CURRENT_PORT = 8000
         threading.Thread(target=_open_admin, args=(8000,), daemon=True).start()
         uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info", reload=False)

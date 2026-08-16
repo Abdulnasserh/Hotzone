@@ -159,9 +159,11 @@ class ServerGUI(ctk.CTk):
 
     def run_uvicorn(self):
         try:
-            from server import app
+            import server
+            app = server.app
             # Attempt Port 80 first
             try:
+                server._CURRENT_PORT = 80
                 config = uvicorn.Config(app=app, host="0.0.0.0", port=80, log_level="info")
                 self.server_instance = uvicorn.Server(config=config)
                 # Launch browser for port 80
@@ -169,6 +171,7 @@ class ServerGUI(ctk.CTk):
                 self.server_instance.run()
             except Exception:
                 # Fallback to Port 8000
+                server._CURRENT_PORT = 8000
                 config = uvicorn.Config(app=app, host="0.0.0.0", port=8000, log_level="info")
                 self.server_instance = uvicorn.Server(config=config)
                 # Launch browser for port 8000
