@@ -382,7 +382,9 @@ python3 server.py
 python3 gui.py
 ```
 
-The server instantly starts up on `http://0.0.0.0:8000` and will automatically pop open the Admin Dashboard in your browser!
+The server starts on `http://0.0.0.0:80` (falls back to 8000 if busy) and automatically pops open the Admin Dashboard in your browser!
+
+**Captive portal:** customers connect to the WiFi and type your server IP (e.g. `http://192.168.1.100`) in any browser to reach the voucher portal and pay.
 
 ### 3. Configure the System
 
