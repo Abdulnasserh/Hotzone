@@ -23,7 +23,7 @@ if (-not $isAdmin) {
 }
 
 # --- Step 1: Check/Install Python ---
-Write-Host "[1/7] Checking Python..." -ForegroundColor Yellow
+Write-Host "[1/6] Checking Python..." -ForegroundColor Yellow
 $python = $null
 foreach ($cmd in @("python", "python3", "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe", "C:\Python312\python.exe")) {
     try {
@@ -75,7 +75,7 @@ if (-not $python) {
 }
 
 # --- Step 2: Check/Install Git ---
-Write-Host "[2/7] Checking Git..." -ForegroundColor Yellow
+Write-Host "[2/6] Checking Git..." -ForegroundColor Yellow
 $gitExists = Get-Command git -ErrorAction SilentlyContinue
 if (-not $gitExists) {
     Write-Host "  Git not found. Installing Git..." -ForegroundColor Yellow
@@ -90,7 +90,7 @@ if (-not $gitExists) {
 }
 
 # --- Step 3: Clone repo ---
-Write-Host "[3/7] Downloading HotZone Pro source code..." -ForegroundColor Yellow
+Write-Host "[3/6] Downloading HotZone Pro source code..." -ForegroundColor Yellow
 $installDir = "$env:USERPROFILE\Desktop\HotZonePro-Build"
 if (Test-Path $installDir) {
     Write-Host "  Removing old folder and re-downloading fresh..." -ForegroundColor Yellow
@@ -107,7 +107,7 @@ Set-Location $installDir
 Write-Host "  Downloaded to: $installDir" -ForegroundColor Green
 
 # --- Step 4: Install Python dependencies ---
-Write-Host "[4/7] Installing Python packages (this may take 1-2 minutes)..." -ForegroundColor Yellow
+Write-Host "[4/6] Installing Python packages (this may take 1-2 minutes)..." -ForegroundColor Yellow
 & $python -m pip install --upgrade pip 2>&1 | Out-Null
 $pipResult = & $python -m pip install -r requirements.txt 2>&1
 if ($LASTEXITCODE -ne 0) {
@@ -117,28 +117,8 @@ if ($LASTEXITCODE -ne 0) {
 & $python -m pip install pyinstaller customtkinter 2>&1 | Out-Null
 Write-Host "  All dependencies installed!" -ForegroundColor Green
 
-# --- Step 5: Install Npcap (required for network control) ---
-Write-Host "[5/7] Installing Npcap (network packet driver)..." -ForegroundColor Yellow
-$npcapInstalled = Test-Path "C:\Windows\System32\Npcap"
-if (-not $npcapInstalled) {
-    $npcapUrl = "https://npcap.com/dist/npcap-1.80.exe"
-    $npcapInstaller = "$env:TEMP\npcap-installer.exe"
-    try {
-        Invoke-WebRequest -Uri $npcapUrl -OutFile $npcapInstaller
-        Start-Process -Wait -FilePath $npcapInstaller -ArgumentList "/S", "/winpcap_mode=yes"
-        Remove-Item $npcapInstaller -Force -ErrorAction SilentlyContinue
-        Write-Host "  Npcap installed!" -ForegroundColor Green
-    } catch {
-        Write-Host "  WARNING: Npcap auto-install failed." -ForegroundColor Yellow
-        Write-Host "  Download manually from: https://npcap.com/dist/npcap-1.80.exe" -ForegroundColor Yellow
-        Write-Host "  (ARP spoofing will be disabled without Npcap)" -ForegroundColor Yellow
-    }
-} else {
-    Write-Host "  Npcap already installed!" -ForegroundColor Green
-}
-
-# --- Step 6: Build .exe with PyInstaller ---
-Write-Host "[6/7] Building HotZonePro.exe (this takes 3-5 minutes, please wait)..." -ForegroundColor Yellow
+# --- Step 5: Build .exe with PyInstaller ---
+Write-Host "[5/6] Building HotZonePro.exe (this takes 3-5 minutes, please wait)..." -ForegroundColor Yellow
 Write-Host "  ..." -ForegroundColor Gray
 
 $ctkPath = & $python -c "import customtkinter; import os; print(os.path.dirname(customtkinter.__file__))"
@@ -153,13 +133,11 @@ $ctkPath = & $python -c "import customtkinter; import os; print(os.path.dirname(
     --add-data "router_scraper.py;." `
     --add-data "$ctkPath;customtkinter" `
     --hidden-import "dnslib" `
-    --hidden-import "scapy" `
     --hidden-import "license_manager" `
     --hidden-import "router_scraper" `
     --hidden-import "PIL._tkinter_finder" `
     --collect-all uvicorn `
     --collect-all fastapi `
-    --collect-all scapy `
     --collect-all dnslib `
     gui.py
 
@@ -172,8 +150,8 @@ if (-not (Test-Path "dist\HotZonePro\HotZonePro.exe")) {
 }
 Write-Host "  Build successful!" -ForegroundColor Green
 
-# --- Step 7: Create Desktop shortcut ---
-Write-Host "[7/7] Creating Desktop shortcut..." -ForegroundColor Yellow
+# --- Step 6: Create Desktop shortcut ---
+Write-Host "[6/6] Creating Desktop shortcut..." -ForegroundColor Yellow
 $desktopPath = [Environment]::GetFolderPath("Desktop")
 $shortcutPath = "$desktopPath\HotZone Pro.lnk"
 $exePath = "$installDir\dist\HotZonePro\HotZonePro.exe"

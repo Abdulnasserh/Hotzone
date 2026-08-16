@@ -4,6 +4,5 @@ websockets
 httpx
 qrcode[pil]
 dnslib
-scapy
 customtkinter
 pyinstaller

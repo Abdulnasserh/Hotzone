@@ -1669,205 +1669,6 @@ def _remove_windows_firewall_rules():
         logger.warning(f"⚠️ Windows Firewall cleanup failed: {e}")
 
 # ---------------------------------------------------------------------------
-# ARP Spoofer — makes all clients think THIS server is the gateway
-# This forces ALL traffic (including DNS) through the server
-# Requires: scapy + Npcap (Windows) or root (macOS/Linux)
-# ---------------------------------------------------------------------------
-
-class ArpSpoofer:
-    def __init__(self):
-        self.running = False
-        self._thread = None
-
-    def _enable_ip_forwarding(self):
-        """Enable IP forwarding so the PC can route traffic to the real gateway."""
-        try:
-            if platform.system() == "Windows":
-                subprocess.run(["reg", "add", 
-                    r"HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters",
-                    "/v", "IPEnableRouter", "/t", "REG_DWORD", "/d", "1", "/f"],
-                    capture_output=True)
-                # Enable forwarding on all interfaces (don't hardcode interface name)
-                r = subprocess.run(["netsh", "interface", "ipv4", "show", "interfaces"],
-                                   capture_output=True, text=True)
-                for line in r.stdout.splitlines():
-                    # Try common wireless interface names
-                    for iface in ["Wi-Fi", "WiFi", "Wireless", "WLAN"]:
-                        if iface.lower() in line.lower():
-                            subprocess.run(["netsh", "interface", "ipv4", "set", "interface",
-                                f"interface={iface}", "forwarding=enabled"], capture_output=True)
-                            break
-                logger.info("🔀 IP forwarding enabled (Windows)")
-            elif platform.system() == "Darwin":
-                subprocess.run(["sysctl", "-w", "net.inet.ip.forwarding=1"], capture_output=True)
-                logger.info("🔀 IP forwarding enabled (macOS)")
-            else:
-                subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture_output=True)
-                logger.info("🔀 IP forwarding enabled (Linux)")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not enable IP forwarding: {e}")
-
-    def _disable_ip_forwarding(self):
-        """Disable IP forwarding."""
-        try:
-            if platform.system() == "Windows":
-                subprocess.run(["reg", "add",
-                    r"HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters",
-                    "/v", "IPEnableRouter", "/t", "REG_DWORD", "/d", "0", "/f"],
-                    capture_output=True)
-            elif platform.system() == "Darwin":
-                subprocess.run(["sysctl", "-w", "net.inet.ip.forwarding=0"], capture_output=True)
-            else:
-                subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=0"], capture_output=True)
-        except Exception:
-            pass
-
-    def start(self, gateway_ip: str, server_ip: str):
-        """Start ARP spoofing — tell all clients that gateway_ip is at our MAC."""
-        if self.running:
-            return
-        try:
-            from scapy.all import get_if_hwaddr, conf, Ether, ARP, sendp
-            self._scapy_available = True
-        except ImportError:
-            logger.warning("⚠️ scapy not installed — ARP spoofing disabled. Install: pip install scapy")
-            return
-
-        # On Windows, verify the packet driver (Npcap/WinPcap) is actually loaded —
-        # otherwise layer-2 sniffing/sending fails with a confusing loop error.
-        if platform.system() == "Windows":
-            try:
-                import scapy.config as sconf
-                from scapy.all import conf as scapy_conf
-                scapy_conf.use_pcap = True
-                lsock = scapy_conf.L2socket()
-                lsock.close()
-            except Exception:
-                logger.warning(
-                    "⚠️ ARP spoofing DISABLED: Npcap/WinPcap packet driver not active on this PC. "
-                    "DNS interception won't work. Fix: install Npcap (https://npcap.com) or run "
-                    "install.ps1 again after rebooting. Router-level deny list still works without it."
-                )
-                return
-        
-        # Enable IP forwarding so authorized traffic passes through to the real gateway
-        self._enable_ip_forwarding()
-        
-        self.running = True
-        self._gateway_ip = gateway_ip
-        self._server_ip = server_ip
-        self._thread = threading.Thread(target=self._spoof_loop, daemon=True)
-        self._thread.start()
-        logger.info(f"🔀 ARP Spoofer active: clients think {gateway_ip} is at this PC")
-
-    def stop(self):
-        """Stop ARP spoofing and restore real gateway ARP."""
-        if not self.running:
-            return
-        self.running = False
-        if self._thread:
-            self._thread.join(timeout=5)
-        # Disable IP forwarding
-        self._disable_ip_forwarding()
-        # Send corrective ARP to restore real gateway
-        try:
-            from scapy.all import Ether, ARP, sendp, getmacbyip
-            real_gw_mac = getmacbyip(self._gateway_ip)
-            if real_gw_mac:
-                # Broadcast the real gateway MAC to all clients
-                pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(
-                    op=2, psrc=self._gateway_ip, hwsrc=real_gw_mac,
-                    pdst="255.255.255.255"
-                )
-                sendp(pkt, count=5, inter=0.2, verbose=False)
-                logger.info("🔀 ARP Spoofer stopped — real gateway restored")
-        except Exception as e:
-            logger.warning(f"⚠️ ARP restore failed: {e}")
-
-    def _spoof_loop(self):
-        try:
-            from scapy.all import Ether, ARP, sendp, get_if_hwaddr, conf, sniff, IP, UDP, DNS, DNSRR, DNSQR, Raw
-            my_mac = get_if_hwaddr(conf.iface)
-            
-            # Start a separate thread to sniff and intercept DNS packets from unauthorized clients
-            def dns_interceptor():
-                """Sniff forwarded DNS packets and respond for unauthorized clients."""
-                def handle_pkt(pkt):
-                    if not self.running:
-                        return
-                    if not pkt.haslayer(DNS) or not pkt.haslayer(IP) or not pkt.haslayer(UDP):
-                        return
-                    if pkt[DNS].qr != 0:  # Only handle queries (qr=0)
-                        return
-                    
-                    src_ip = pkt[IP].src
-                    # Skip our own packets
-                    if src_ip == self._server_ip or src_ip == "127.0.0.1":
-                        return
-                    
-                    # Check if this client is authorized
-                    mac = _ip_to_mac.get(src_ip, "").upper()
-                    is_auth = False
-                    if mac:
-                        whitelist = get_whitelist()
-                        for w in whitelist:
-                            if w["mac"].upper() == mac:
-                                is_auth = True
-                                break
-                        if not is_auth:
-                            vouchers = get_vouchers()
-                            now = datetime.now()
-                            for v in vouchers:
-                                if v.get("mac", "").upper() == mac and v.get("status") == "active":
-                                    try:
-                                        if datetime.fromisoformat(v["expires"]) > now:
-                                            is_auth = True
-                                    except:
-                                        pass
-                                    break
-                    
-                    if is_auth:
-                        return  # Let the packet through (IP forwarding handles it)
-                    
-                    # Unauthorized — respond with server IP (redirect to portal)
-                    try:
-                        qname = pkt[DNSQR].qname.decode() if pkt[DNSQR].qname else ""
-                        server_ip = _get_server_ip()
-                        
-                        spoofed = (IP(dst=src_ip, src=pkt[IP].dst) /
-                                   UDP(dport=pkt[UDP].sport, sport=53) /
-                                   DNS(id=pkt[DNS].id, qr=1, aa=1, qd=pkt[DNS].qd,
-                                       an=DNSRR(rrname=qname, ttl=60, rdata=server_ip)))
-                        from scapy.all import send as scapy_send
-                        scapy_send(spoofed, verbose=False)
-                    except Exception:
-                        pass
-                
-                try:
-                    sniff(filter="udp port 53", prn=handle_pkt, store=0,
-                          stop_filter=lambda x: not self.running)
-                except Exception as e:
-                    logger.warning(f"⚠️ DNS interceptor stopped: {e}")
-            
-            threading.Thread(target=dns_interceptor, daemon=True).start()
-            logger.info("🔀 DNS interceptor active (sniffing port 53 packets)")
-            
-            while self.running:
-                # Send gratuitous ARP: "gateway_ip is at my_mac"
-                pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(
-                    op=2,  # ARP reply
-                    psrc=self._gateway_ip,  # Pretend to be the gateway
-                    hwsrc=my_mac,           # But with OUR MAC
-                    pdst="255.255.255.255"  # Broadcast to all
-                )
-                sendp(pkt, verbose=False)
-                time.sleep(3)  # Re-send every 3 seconds to maintain the spoof
-        except Exception as e:
-            logger.warning(f"⚠️ ARP spoof loop error: {e}")
-            self.running = False
-
-_arp_spoofer = ArpSpoofer()
-
 # ---------------------------------------------------------------------------
 # System Control — Washa System
 # ---------------------------------------------------------------------------
@@ -1914,15 +1715,9 @@ async def system_start():
         await set_dhcp_dns(server_ip)
         _add_pf_dns_redirect()
         _add_windows_firewall_rules()
-        # NOTE: ARP spoofing is DELIBERATELY disabled. It contradicts the
-        # router-DROP gate: if we ARP-spoof + IP-forward, every client's packets
-        # leave via the SERVER's own MAC (which is ACCEPTed), so the router's
-        # DROP never sees the real client MAC → unauthorized phones get internet.
-        # With the router DROP gate, customers reach the portal by typing the
-        # server IP manually (LAN→LAN is NOT gated by DROP, only lan→wan is).
-        if _arp_spoofer.running:
-            _arp_spoofer.stop()
-            logger.info("ℹ️ ARP spoofing disabled — using router DROP gate (manual portal entry)")
+        # NO ARP spoofing by design. The router DROP gate blocks lan→wan for
+        # unauthorized MACs; customers reach the portal by typing the server IP
+        # manually (LAN→LAN traffic is not gated by DROP, only lan→wan is).
         global _enforcer_task
         if not _enforcer_task or _enforcer_task.done():
             _enforcer_task = asyncio.create_task(expiry_enforcer())
@@ -1952,8 +1747,6 @@ async def system_stop():
     _remove_pf_dns_redirect()
     # Remove Windows Firewall rules
     _remove_windows_firewall_rules()
-    # Stop ARP spoofer
-    _arp_spoofer.stop()
     # Restore router to Allow-All mode
     await disable_whitelist_mode()
     return {"status": "stopped"}
@@ -2050,7 +1843,6 @@ async def router_restore():
             _dns_blocker.stop()
         _remove_pf_dns_redirect()
         _remove_windows_firewall_rules()
-        _arp_spoofer.stop()
 
         # 2. Restore router to open mode
         ok = await disable_whitelist_mode()
@@ -2416,7 +2208,6 @@ if __name__ == "__main__":
         # Cleanup network modifications
         _remove_pf_dns_redirect()
         _remove_windows_firewall_rules()
-        _arp_spoofer.stop()
         if _dns_blocker.running:
             _dns_blocker.stop()
         os._exit(0)
