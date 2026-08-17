@@ -409,44 +409,60 @@ async def my_status(request: Request):
     return {"active": False}
 
 # ---------------------------------------------------------------------------
-# IP→MAC mapping cache (populated from router or DB)
+# IP→MAC mapping cache — TTL-based so stale entries (e.g. Samsung MAC
+# rotation after reconnect) are never served forever.
 # ---------------------------------------------------------------------------
-_ip_to_mac = {}
+_MAC_CACHE_TTL = 30  # seconds — short enough to catch rotation, long enough to not hammer router
+_ip_to_mac: dict[str, tuple[str, float]] = {}  # ip -> (mac, timestamp)
+
+def _mac_cache_get(ip: str) -> str | None:
+    entry = _ip_to_mac.get(ip)
+    if entry and (time.time() - entry[1]) < _MAC_CACHE_TTL:
+        return entry[0]
+    if entry:
+        del _ip_to_mac[ip]  # expired — remove so next lookup goes fresh to router
+    return None
+
+def _mac_cache_set(ip: str, mac: str):
+    _ip_to_mac[ip] = (mac, time.time())
 
 async def _resolve_mac(ip: str) -> str | None:
-    """Look up a client's MAC by IP from DB cache, ARP table, or router scrape."""
-    if ip in _ip_to_mac:
-        return _ip_to_mac[ip]
-    for ds in get_devices_store():
-        if ds.get("ip") == ip:
-            mac = ds.get("mac", "").upper()
-            if mac:
-                _ip_to_mac[ip] = mac
-                return mac
-    # ARP lookup fallback
-    try:
-        cmd = ["arp", "-a", ip] if platform.system() == "Windows" else ["arp", "-n", ip]
-        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        stdout, _ = await proc.communicate()
-        out = stdout.decode(errors="ignore")
-        import re
-        match = re.search(r"([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})", out)
-        if match:
-            found_mac = match.group(0).replace("-", ":").upper()
-            _ip_to_mac[ip] = found_mac
-            logger.info(f"Resolved MAC via local ARP: {ip} -> {found_mac}")
-            return found_mac
-    except Exception:
-        pass
+    """Look up a client's MAC by IP. Cache expires every 30s so MAC rotation
+    (Samsung random MAC on reconnect) is detected within one cache window."""
+    cached = _mac_cache_get(ip)
+    if cached:
+        return cached
+    # Always try the router scrape first — it is the authoritative source
     try:
         devices = await scrape_devices()
         for d in devices:
             dmac = d.get("mac", "").upper()
             dip = d.get("ip")
-            if dip:
-                _ip_to_mac[dip] = dmac
-                if dip == ip and dmac:
-                    return dmac
+            if dip and dmac:
+                _mac_cache_set(dip, dmac)
+            if dip == ip and dmac:
+                return dmac
+    except Exception:
+        pass
+    # Fallback: devices store (last known state)
+    for ds in get_devices_store():
+        if ds.get("ip") == ip:
+            mac = ds.get("mac", "").upper()
+            if mac:
+                _mac_cache_set(ip, mac)
+                return mac
+    # Last resort: OS ARP table
+    try:
+        cmd = ["arp", "-a", ip] if platform.system() == "Windows" else ["arp", "-n", ip]
+        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout, _ = await proc.communicate()
+        out = stdout.decode(errors="ignore")
+        match = re.search(r"([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})", out)
+        if match:
+            found_mac = match.group(0).replace("-", ":").upper()
+            _mac_cache_set(ip, found_mac)
+            logger.info(f"Resolved MAC via local ARP: {ip} -> {found_mac}")
+            return found_mac
     except Exception:
         pass
     return None
@@ -1353,12 +1369,12 @@ class DnsBlocker:
         config = self._cached_config()
         if ip == config.get("serverIp", ""):
             return True
-        mac = _ip_to_mac.get(ip)
+        mac = _mac_cache_get(ip)
         if not mac:
             # Try ARP table lookup for unknown IPs
             mac = self._arp_lookup(ip)
             if mac:
-                _ip_to_mac[ip] = mac
+                _mac_cache_set(ip, mac)
             else:
                 return False  # Can't identify device — block it
         mac = mac.upper()
@@ -1962,9 +1978,9 @@ async def live_devices():
             is_authorized = mac in authorized_macs
             is_server = (ip == server_ip)
             
-            # Update _ip_to_mac cache
+            # Update IP→MAC cache (TTL-based)
             if ip and mac:
-                _ip_to_mac[ip] = mac
+                _mac_cache_set(ip, mac)
 
             # Find voucher info if authorized via voucher
             voucher_info = None

@@ -312,12 +312,20 @@ HOTZONE_TAG = "hotzone"   # tag used in rule comment; we only touch our own rule
 async def _replace_mac_rule(client, router_ip, session, mac: str, target: str) -> bool:
     """Set a per-MAC rule to the desired target, replacing any existing
     hotzone rule for the same MAC (so we never end up with conflicting
-    ACCEPT+DROP rules). Returns True on success."""
-    # Delete existing hotzone rules for this MAC
-    rules = await _get_macipport_rules(client, router_ip, session)
-    for r in rules:
-        if _norm_mac(r.get("src_mac")) == mac and str(r.get("name", "")).startswith(HOTZONE_TAG):
-            await _delete_filter_rule(client, router_ip, session, r["section_id"])
+    ACCEPT+DROP rules). Re-reads the rule list after every delete so
+    router section-id re-indexing never leaves stale orphan rules."""
+    # Delete all existing hotzone rules for this MAC — re-read each time
+    # because the router re-indexes section IDs after every deletion.
+    for _ in range(50):
+        rules = await _get_macipport_rules(client, router_ip, session)
+        target_rule = None
+        for r in rules:
+            if _norm_mac(r.get("src_mac")) == mac and str(r.get("name", "")).startswith(HOTZONE_TAG):
+                target_rule = r
+                break
+        if target_rule is None:
+            break
+        await _delete_filter_rule(client, router_ip, session, target_rule["section_id"])
 
     comment = f"{HOTZONE_TAG}_allow_{mac}" if target == "ACCEPT" else f"{HOTZONE_TAG}_block_{mac}"
     return await _add_filter_rule(client, router_ip, session, mac, target, comment=comment)
@@ -390,14 +398,9 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
             # Desired ACCEPT set = all authorized MACs
             desired = {_norm_mac(w.get("mac", "")) for w in whitelist if w.get("mac")}
 
-            # Existing hotzone rules we own
-            rules = await _get_macipport_rules(client, router_ip, session)
-            owned = [r for r in rules if str(r.get("name", "")).startswith(HOTZONE_TAG)]
-            kept_macs = {r["src_mac"] for r in owned if r["target"] == "ACCEPT"}
-
-            # Delete our stale rules (ACCEPT that's no longer desired; DROP no
-            # longer needed since default DROP covers them). Delete one-by-one
-            # with fresh reads so section-id re-indexing can't miss any.
+            # Delete our stale rules first (ACCEPT no longer desired; DROP rules
+            # are redundant since default DROP covers them). Re-read after every
+            # delete so section-id re-indexing never leaves orphan rules.
             for _ in range(200):
                 rules_now = await _get_macipport_rules(client, router_ip, session)
                 stale = None
@@ -412,6 +415,12 @@ async def sync_whitelist_to_router(whitelist: list[dict]) -> bool:
                 if stale is None:
                     break
                 await _delete_filter_rule(client, router_ip, session, stale["section_id"])
+
+            # Re-read AFTER deletions — kept_macs must reflect current router state,
+            # not the pre-deletion snapshot (stale snapshot caused missing ACCEPT rules).
+            rules_after = await _get_macipport_rules(client, router_ip, session)
+            kept_macs = {r["src_mac"] for r in rules_after
+                         if str(r.get("name", "")).startswith(HOTZONE_TAG) and r["target"] == "ACCEPT"}
 
             # Add ACCEPT for any desired MAC not already accepted
             for mac in sorted(desired):
