@@ -1047,7 +1047,7 @@ def _generate_qr(data: str) -> io.BytesIO:
     qr.make(fit=True)
     img = qr.make_image(fill_color="#1a1a2e", back_color="white")
     buf = io.BytesIO()
-    img.save(buf, format="PNG")
+    img.save(buf)
     buf.seek(0)
     return buf
 
