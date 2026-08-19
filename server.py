@@ -2262,22 +2262,23 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, _force_exit)
     signal.signal(signal.SIGTERM, _force_exit)
 
-    # 2. Auto-launch the Admin Portal locally when the server starts
-    def _open_admin(port):
-        time.sleep(2.0)
-        url = f"http://127.0.0.1:{port}/admin" if port != 80 else "http://127.0.0.1/admin"
-        logger.info(f"🌐 Opening admin: {url}")
-        webbrowser.open(url)
-
-    # 3. Start Web Portal (HTTP-only) on Port 80
+    # 2. Start Web Portal on Port 80 (or fallback 8000)
     logger.info("🚀 Starting Web Portal...")
+    target_port = 80
     try:
-        _CURRENT_PORT = 80
-        threading.Thread(target=_open_admin, args=(80,), daemon=True).start()
-        uvicorn.run(app, host="0.0.0.0", port=80, log_level="info", reload=False)
-    except Exception as e:
-        logger.error(f"Failed to start on Port 80: {e}")
-        logger.info("Retrying on 8000...")
-        _CURRENT_PORT = 8000
-        threading.Thread(target=_open_admin, args=(8000,), daemon=True).start()
-        uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info", reload=False)
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("0.0.0.0", 80))
+        s.close()
+    except Exception:
+        target_port = 8000
+
+    _CURRENT_PORT = target_port
+    admin_url = "http://127.0.0.1/admin" if target_port == 80 else f"http://127.0.0.1:{target_port}/admin"
+    def _open_admin():
+        time.sleep(1.5)
+        logger.info(f"🌐 Opening admin: {admin_url}")
+        webbrowser.open(admin_url)
+
+    threading.Thread(target=_open_admin, daemon=True).start()
+    uvicorn.run(app, host="0.0.0.0", port=target_port, log_level="info", reload=False)

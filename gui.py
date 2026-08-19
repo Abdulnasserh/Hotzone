@@ -159,25 +159,26 @@ class ServerGUI(ctk.CTk):
 
     def run_uvicorn(self):
         try:
-            import server
+            import server, socket
             app = server.app
             server._free_port_80()
-            # Attempt Port 80 first
+            
+            target_port = 80
             try:
-                server._CURRENT_PORT = 80
-                config = uvicorn.Config(app=app, host="0.0.0.0", port=80, log_level="info")
-                self.server_instance = uvicorn.Server(config=config)
-                # Launch browser for port 80
-                threading.Timer(2.0, lambda: webbrowser.open("http://127.0.0.1/admin")).start()
-                self.server_instance.run()
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(("0.0.0.0", 80))
+                s.close()
             except Exception:
-                # Fallback to Port 8000
-                server._CURRENT_PORT = 8000
-                config = uvicorn.Config(app=app, host="0.0.0.0", port=8000, log_level="info")
-                self.server_instance = uvicorn.Server(config=config)
-                # Launch browser for port 8000
-                threading.Timer(2.0, lambda: webbrowser.open("http://127.0.0.1:8000/admin")).start()
-                self.server_instance.run()
+                target_port = 8000
+
+            server._CURRENT_PORT = target_port
+            admin_url = "http://127.0.0.1/admin" if target_port == 80 else f"http://127.0.0.1:{target_port}/admin"
+            threading.Timer(1.5, lambda: webbrowser.open(admin_url)).start()
+
+            config = uvicorn.Config(app=app, host="0.0.0.0", port=target_port, log_level="info")
+            self.server_instance = uvicorn.Server(config=config)
+            self.server_instance.run()
         except Exception as e:
             def show_error():
                 messagebox.showerror("Server Crash", f"The server failed to start:\n\n{str(e)}\n\n(It may be blocked by a Firewall, Port 80 or 8000 is used, or data is inaccessible)")
