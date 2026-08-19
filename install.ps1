@@ -166,27 +166,40 @@ if (-not (Test-Path "dist\HotZonePro\HotZonePro.exe")) {
 Write-Host "  Build successful!" -ForegroundColor Green
 
 # --- Step 6: Create Desktop shortcut ---
-Write-Host "[7/7] Creating Desktop shortcut..." -ForegroundColor Yellow
+Write-Host "[7/7] Creating shortcuts..." -ForegroundColor Yellow
 $desktopPath = [Environment]::GetFolderPath("Desktop")
-$shortcutPath = "$desktopPath\HotZone Pro.lnk"
-$exePath = "$installDir\dist\HotZonePro\HotZonePro.exe"
+$exePath     = "$installDir\dist\HotZonePro\HotZonePro.exe"
 
+# Write a launcher .bat that always resolves the current .exe path
+# so reinstalls don't leave stale shortcuts pointing to a deleted .exe
+$launcherPath = "$env:APPDATA\HotZonePro\launch.bat"
+@"
+@echo off
+set EXE=%USERPROFILE%\Desktop\HotZonePro-Build\dist\HotZonePro\HotZonePro.exe
+if exist "%EXE%" (
+    start "" "%EXE%"
+) else (
+    echo HotZone Pro not found. Please reinstall.
+    pause
+)
+"@ | Set-Content -Path $launcherPath -Encoding ASCII
+
+# Desktop shortcut → launcher .bat
 $WshShell = New-Object -ComObject WScript.Shell
-$shortcut = $WshShell.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = $exePath
-$shortcut.WorkingDirectory = "$installDir\dist\HotZonePro"
-$shortcut.IconLocation = "$installDir\hotzone.ico"
-$shortcut.Description = "HotZone Pro WiFi Voucher System"
+$shortcut = $WshShell.CreateShortcut("$desktopPath\HotZone Pro.lnk")
+$shortcut.TargetPath    = $launcherPath
+$shortcut.WorkingDirectory = "$env:APPDATA\HotZonePro"
+$shortcut.IconLocation  = "$installDir\hotzone.ico"
+$shortcut.Description   = "HotZone Pro WiFi Voucher System"
 $shortcut.Save()
-Write-Host "  Shortcut created on Desktop!" -ForegroundColor Green
+Write-Host "  Desktop shortcut created!" -ForegroundColor Green
 
-# --- Add to Windows Startup (optional) ---
+# Startup shortcut → same launcher .bat (survives reinstalls)
 $startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-$startupShortcut = "$startupPath\HotZone Pro.lnk"
 $WshShell2 = New-Object -ComObject WScript.Shell
-$sc2 = $WshShell2.CreateShortcut($startupShortcut)
-$sc2.TargetPath = $exePath
-$sc2.WorkingDirectory = "$installDir\dist\HotZonePro"
+$sc2 = $WshShell2.CreateShortcut("$startupPath\HotZone Pro.lnk")
+$sc2.TargetPath    = $launcherPath
+$sc2.WorkingDirectory = "$env:APPDATA\HotZonePro"
 $sc2.Save()
 Write-Host "  Auto-start on boot enabled!" -ForegroundColor Green
 
@@ -203,8 +216,8 @@ Write-Host ""
 Write-Host "  HOW TO USE:" -ForegroundColor Cyan
 Write-Host "  1. Double-click 'HotZone Pro' on Desktop" -ForegroundColor White
 Write-Host "  2. Click 'Start Server'" -ForegroundColor White
-Write-Host "  3. In browser: click 'Washa System' to activate" -ForegroundColor White
-Write-Host "  4. Give voucher codes to customers" -ForegroundColor White
+Write-Host "  3. Browser opens automatically — click 'Washa System'" -ForegroundColor White
+Write-Host "  4. Customers type http://<your-ip>:8000 to reach portal" -ForegroundColor White
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
@@ -212,5 +225,5 @@ Write-Host ""
 # Ask to launch now
 $launch = Read-Host "Launch HotZone Pro now? (Y/N)"
 if ($launch -eq "Y" -or $launch -eq "y") {
-    Start-Process -Verb RunAs -FilePath $exePath
+    Start-Process -FilePath $launcherPath
 }
