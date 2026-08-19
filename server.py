@@ -1270,12 +1270,21 @@ async def redeem_voucher_code(req: RedeemRequest, request: Request):
     
     return response
 
+_log_buffer = []
+_log_handler = None
+
+class _BufferHandler(logging.Handler):
+    def emit(self, record):
+        _log_buffer.append(self.format(record))
+        if len(_log_buffer) > 200:
+            _log_buffer.pop(0)
+
 def _setup_log_buffer():
     global _log_handler
     if _log_handler is None:
         _log_handler = _BufferHandler()
-        logging.getLogger("hotzone").addHandler(_log_handler)
-        logging.getLogger("router_scraper").addHandler(_log_handler)
+        _log_handler.setFormatter(log_formatter)
+        logging.getLogger().addHandler(_log_handler)
 
 _setup_log_buffer()
 
