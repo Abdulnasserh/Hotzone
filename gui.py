@@ -198,8 +198,8 @@ class ServerGUI(ctk.CTk):
         self.import_btn.configure(state="disabled")
         self.status_label.configure(text="Server Status: RUNNING", text_color="#10B981")
 
-        # Open admin portal automatically after 2 seconds on main thread
-        self.after(2000, self._open_admin_browser)
+        # Open admin portal after server is ready (5s gives uvicorn time to bind)
+        self.after(5000, self._open_admin_browser)
 
         # Remind admin to press Washa System
         self.after(3000, self._remind_washa)

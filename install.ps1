@@ -121,6 +121,11 @@ Write-Host "  All dependencies installed!" -ForegroundColor Green
 Write-Host "[5/6] Building HotZonePro.exe (this takes 3-5 minutes, please wait)..." -ForegroundColor Yellow
 Write-Host "  ..." -ForegroundColor Gray
 
+# Remove any stale .spec file from previous/Mac builds — it has hardcoded
+# Mac paths that break the Windows build if PyInstaller picks it up.
+if (Test-Path "HotZonePro.spec") { Remove-Item "HotZonePro.spec" -Force }
+if (Test-Path "gui.spec")         { Remove-Item "gui.spec"         -Force }
+
 $ctkPath = & $python -c "import customtkinter; import os; print(os.path.dirname(customtkinter.__file__))"
 
 & $python -m PyInstaller `
