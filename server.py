@@ -78,7 +78,6 @@ logger = logging.getLogger("hotzone")
 # ---------------------------------------------------------------------------
 # System state — passive until user presses "Washa System"
 # ---------------------------------------------------------------------------
-_enforcer_task = None
 
 # ---------------------------------------------------------------------------
 # SQLite Relational Database Layer
@@ -323,6 +322,8 @@ class PinRequest(BaseModel):
 # Admin session tokens (simple in-memory set)
 # ---------------------------------------------------------------------------
 admin_sessions: set[str] = set()
+_enforcer_task = None
+_instant_block_task = None
 
 # ---------------------------------------------------------------------------
 # Routes — Customer page
@@ -1434,11 +1435,13 @@ async def router_test():
 async def router_restore():
     """Emergency: disable all blocking and restore open internet access."""
     try:
-        # 1. Stop enforcer and DNS blocker
-        global _enforcer_task
+        # 1. Stop enforcers
+        global _enforcer_task, _instant_block_task
         if _enforcer_task and not _enforcer_task.done():
             _enforcer_task.cancel()
-            _enforcer_task = None
+        if _instant_block_task and not _instant_block_task.done():
+            _instant_block_task.cancel()
+            _instant_block_task = None
 
         # 2. Restore router to open mode
         ok = await disable_whitelist_mode()
@@ -1660,18 +1663,24 @@ async def system_start():
         logger.info(f"Washa System: {len(active_macs)} authorized MACs")
         allowed_list = [{"mac": mac} for mac in active_macs]
 
-        if active_macs:
-            ok = await sync_whitelist_to_router(allowed_list)
-            if ok:
-                await purge_unauthorized_macs(active_macs)
-        else:
-            ok = False
-            logger.warning("⚠️ Whitelist empty — add your MAC to the whitelist first!")
+        # Scrape connected clients so we can immediately DROP unauthorized ones
+        try:
+            connected = await scrape_devices()
+        except Exception:
+            connected = []
 
-        global _enforcer_task
+        ok = await sync_whitelist_to_router(allowed_list, connected)
+        if not ok:
+            logger.warning("⚠️ Router sync failed")
+
+        global _enforcer_task, _instant_block_task
         if not _enforcer_task or _enforcer_task.done():
             _enforcer_task = asyncio.create_task(expiry_enforcer())
             logger.info("✅ Expiry enforcer started")
+
+        if not _instant_block_task or _instant_block_task.done():
+            _instant_block_task = asyncio.create_task(instant_block_enforcer())
+            logger.info("✅ Instant block enforcer started (3s interval)")
 
         status = "ok" if ok else "error"
         return {"status": status, "allowed_count": len(active_macs), "whitelist_empty": len(active_macs) == 0}
@@ -1682,11 +1691,14 @@ async def system_start():
 
 @app.post("/api/system/stop")
 async def system_stop():
-    """Stop enforcement — cancel enforcer and disable router whitelist mode."""
-    global _enforcer_task
+    """Stop enforcement — cancel enforcers and disable router whitelist mode."""
+    global _enforcer_task, _instant_block_task
     if _enforcer_task and not _enforcer_task.done():
         _enforcer_task.cancel()
         _enforcer_task = None
+    if _instant_block_task and not _instant_block_task.done():
+        _instant_block_task.cancel()
+        _instant_block_task = None
     await disable_whitelist_mode()
     return {"status": "stopped"}
 
@@ -1838,10 +1850,48 @@ async def expiry_enforcer():
         # Check expiry every 15 seconds for aggressive enforcement
         await asyncio.sleep(15) 
 
+async def instant_block_enforcer():
+    """Every 3s: scrape connected clients, immediately DROP any unknown MAC.
+    This closes the window where new devices get free internet before paying.
+    Authorized = permanent whitelist + active unexpired vouchers + server MAC."""
+    await asyncio.sleep(5)  # short initial delay
+    while True:
+        try:
+            now = datetime.now()
+            whitelist = get_whitelist()
+            vouchers  = get_vouchers()
+
+            auth_macs = {w["mac"].upper() for w in whitelist}
+            for sm in _get_server_macs():
+                auth_macs.add(sm)
+            for v in vouchers:
+                if v.get("status") == "active":
+                    try:
+                        if datetime.fromisoformat(v["expires"]) > now:
+                            auth_macs.add(v["mac"].upper())
+                    except Exception:
+                        pass
+
+            # Scrape currently connected clients
+            devices = await scrape_devices()
+            for d in devices:
+                mac = (d.get("mac") or "").upper()
+                if not mac or mac in auth_macs:
+                    continue
+                # Unknown/unauthorized MAC — block immediately
+                await block_device(mac)
+                logger.info(f"⚡ Instant block: {mac} ({d.get('hostname','?')}) not authorized")
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.debug(f"instant_block_enforcer error: {e}")
+
+        await asyncio.sleep(3)
 
 
 # ---------------------------------------------------------------------------
-# Catch-all — serve portal for any unknown domain (from DNS redirect)
+# Catch-all — serve portal for any unknown path
 # ---------------------------------------------------------------------------
 
 @app.api_route("/{path_name:path}", methods=["GET", "HEAD"])
