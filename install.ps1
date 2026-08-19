@@ -97,7 +97,7 @@ if (Test-Path $installDir) {
     Remove-Item -Recurse -Force $installDir
 }
 Write-Host "  Downloading latest code..." -ForegroundColor Yellow
-git clone "https://github.com/Abdulnasserh/Hotzone.git" $installDir
+git clone --depth 1 --single-branch --branch main "https://github.com/Abdulnasserh/Hotzone.git" $installDir
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  ERROR: Failed to download! Check internet connection." -ForegroundColor Red
     pause
