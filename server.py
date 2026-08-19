@@ -471,20 +471,6 @@ async def _resolve_mac(ip: str) -> str | None:
             if mac:
                 _mac_cache_set(ip, mac)
                 return mac
-    # Last resort: OS ARP table
-    try:
-        cmd = ["arp", "-a", ip] if platform.system() == "Windows" else ["arp", "-n", ip]
-        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        stdout, _ = await proc.communicate()
-        out = stdout.decode(errors="ignore")
-        match = re.search(r"([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})", out)
-        if match:
-            found_mac = match.group(0).replace("-", ":").upper()
-            _mac_cache_set(ip, found_mac)
-            logger.info(f"Resolved MAC via local ARP: {ip} -> {found_mac}")
-            return found_mac
-    except Exception:
-        pass
     return None
 
 @app.get("/api/devices")
@@ -1410,34 +1396,12 @@ class DnsBlocker:
             return True
 
         mac = _mac_cache_get(ip)
-        if not mac:
-            # Try ARP table lookup for unknown IPs
-            mac = self._arp_lookup(ip)
-            if mac:
-                _mac_cache_set(ip, mac)
-
         if mac:
             mac = mac.upper()
             return mac in self._authorized_macs_cache
 
         # If MAC could not be resolved yet, fallback to True if ANY active voucher has client_ip
         return ip in DnsBlocker._authorized_ips_cache
-
-    def _arp_lookup(self, ip):
-        """Quick ARP table lookup to find MAC for an IP."""
-        try:
-            if platform.system() == "Windows":
-                r = subprocess.run(["arp", "-a", ip], capture_output=True, text=True, timeout=2)
-            else:
-                r = subprocess.run(["arp", "-n", ip], capture_output=True, text=True, timeout=2)
-            for line in r.stdout.splitlines():
-                # Look for MAC pattern XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX
-                m = re.search(r'([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}', line)
-                if m:
-                    return m.group(0).replace("-", ":").upper()
-        except Exception:
-            pass
-        return None
 
     # --- Caching to avoid hammering SQLite on every DNS packet ---
     _config_cache = None
