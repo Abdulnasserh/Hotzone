@@ -1830,17 +1830,9 @@
     let ws;
     let adminToken = sessionStorage.getItem('hz_admin_token') || '';
 
-    // ─── PIN Authentication ───
+    // ─── PIN Authentication (disabled — opens directly to dashboard) ───
     (async function checkAuth() {
-      if (adminToken) {
-        try {
-          const r = await fetch(API + '/api/admin/check', { headers: { 'X-Admin-Token': adminToken } });
-          if (r.ok) { unlockAdmin(); return; }
-        } catch (e) { }
-        sessionStorage.removeItem('hz_admin_token');
-        adminToken = '';
-      }
-      setupPinInputs();
+      unlockAdmin();
     })();
 
     function setupPinInputs() {
