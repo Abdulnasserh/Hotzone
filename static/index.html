@@ -250,11 +250,23 @@ if (qrCode) {
 // ── Check if user already has active session ──
 async function checkStatus() {
   try {
-    const r = await fetch(API + '/api/my-status');
+    const savedVoucher = localStorage.getItem('hz_voucher_token');
+    let url = API + '/api/my-status';
+    if (savedVoucher) {
+      try {
+        const vObj = JSON.parse(savedVoucher);
+        if (vObj && vObj.id) {
+          url += '?voucher_id=' + encodeURIComponent(vObj.id);
+        }
+      } catch(x){}
+    }
+    const r = await fetch(url);
     if (r.ok) {
       const d = await r.json();
       if (d.active && d.expires) {
         onSuccess({ expires: d.expires });
+      } else {
+        localStorage.removeItem('hz_voucher_token');
       }
     }
   } catch(e) {}
@@ -306,6 +318,9 @@ function onSuccess(voucher) {
   if (voucher && voucher.expires) {
     expDate = new Date(voucher.expires);
     el.textContent = expDate.toLocaleString('sw-TZ', { dateStyle: 'medium', timeStyle: 'short' });
+    if (voucher.id) {
+      try { localStorage.setItem('hz_voucher_token', JSON.stringify({ id: voucher.id, expires: voucher.expires })); } catch(e){}
+    }
   } else {
     el.textContent = '—';
   }

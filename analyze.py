@@ -42,13 +42,38 @@ async def analyze():
             print(f"    ❌ Cannot connect: {e}")
             return
 
-        # ── MOST CRITICAL TEST: Can we ADD per-MAC ACCEPT rules? ──
+        # ── STEP 1: Read current switch state ──
+        print("\n[2] Read macipport_filter switch state...")
+        code, data = await ubus(c, session, "zwrt_router.api", "router_get_macipport_filter_switch")
+        print(f"    code={code} data={data}")
+
+        CODE = """"
+            2 = switch off / not enabled
+            3 = switch on ?
+        """
+
+        # ── STEP 2: ENABLE the DROP switch (global firewall DROP) ──
+        print("\n[3] Enabling macipport_filter DROP switch (blocks internet, WiFi stays)...")
+        code, data = await ubus(c, session, "zwrt_router.api", "router_set_macipport_filter_switch", {
+            "macipport_filter_enable": 1,
+            "default_firewall_policy": "DROP"
+        })
+        print(f"    code={code} data={data}")
+        drop_enabled = (code == 0)
+        if not drop_enabled:
+            print("    ⚠️ DROP switch failed — stopping test, restoring ACCEPT")
+            await ubus(c, session, "zwrt_router.api", "router_set_macipport_filter_switch", {
+                "macipport_filter_enable": 0,
+                "default_firewall_policy": "ACCEPT"
+            })
+
+        # ── STEP 3: CRITICAL TEST — per-MAC ACCEPT while DROP is ON ──
         print("\n" + "="*60)
-        print("  CRITICAL TEST: Add ACCEPT rule for specific MAC")
-        print("  Using FAKE MAC: AA:BB:CC:DD:EE:FF (no real device)")
+        print("  CRITICAL TEST: Add ACCEPT rule with DROP switch ON")
         print("="*60)
 
         FAKE_MAC = "AA:BB:CC:DD:EE:FF"
+        OWN_MAC  = "60:30:d4:6e:53:10"
         accept_worked = False
         working_params = None
 
@@ -76,8 +101,8 @@ async def analyze():
                 print(f"  Cleanup (delete): code={del_code}")
                 break
 
-        # ── TEST: Can we READ current filter rules? ──
-        print("\n[3] Read current MAC filter rules (read-only)...")
+        # ── STEP 4: Can we READ current filter rules? ──
+        print("\n[4] Read current MAC filter rules (read-only)...")
         for method in ["router_get_macipport_filter", "router_get_mac_filter_list", "router_get_mac_filter"]:
             code, data = await ubus(c, session, "zwrt_router.api", method)
             if code == 0:
@@ -86,16 +111,25 @@ async def analyze():
             else:
                 print(f"    ❌ {method}: code={code}")
 
+        # ── STEP 5: CLEANUP — restore ACCEPT always ──
+        print("\n[5] Cleanup — restoring ACCEPT switch...")
+        code, data = await ubus(c, session, "zwrt_router.api", "router_set_macipport_filter_switch", {
+            "macipport_filter_enable": 0,
+            "default_firewall_policy": "ACCEPT"
+        })
+        print(f"    code={code}")
+
         # ── FINAL VERDICT ──
         print("\n" + "="*60)
         print("  FINAL VERDICT")
         print("="*60)
 
-        if accept_worked:
+        if drop_enabled and accept_worked:
             print(f"""
   ✅ FULL ROUTER BLOCKING WORKS!
 
-  Working params: {json.dumps(working_params)}
+  DROP switch: WORKS (blocks internet, WiFi stays connected)
+  ACCEPT rule: WORKS (params: {json.dumps(working_params)})
 
   Complete flow confirmed:
   WASHA  → DROP all + ACCEPT for whitelisted MACs
@@ -104,9 +138,9 @@ async def analyze():
 
   SYSTEM WILL WORK 100% ON THIS ROUTER ✅
             """)
-        else:
+        elif drop_enabled:
             print("""
-  ❌ Per-MAC ACCEPT rule NOT working via API
+  ⚠️ DROP works but per-MAC ACCEPT rule NOT working via API
 
   IMPACT:
   - DROP blocks everyone ✅
@@ -118,6 +152,10 @@ async def analyze():
   - Technical users with manual DNS can bypass
 
   SYSTEM WILL WORK WITH DNS BLOCKING ONLY ⚠️
+            """)
+        else:
+            print("""
+  ❌ Even DROP switch failed via API. Only DNS Blocker available.
             """)
 
 asyncio.run(analyze())

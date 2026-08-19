@@ -375,17 +375,37 @@ async def check_admin_session(request: Request):
 
 
 @app.get("/api/my-status")
-async def my_status(request: Request):
+async def my_status(request: Request, voucher_id: str = None):
     client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
     if not client_ip:
         client_ip = request.client.host if request.client else ""
     
-    # Try resolving MAC for this IP
+    now = datetime.now()
+
+    # 1. If voucher_id passed, check and auto-update MAC for new MAC rotation!
+    if voucher_id:
+        vouchers = get_vouchers()
+        for v in vouchers:
+            if v.get("id") == voucher_id and v.get("status") == "active":
+                try:
+                    exp_dt = datetime.fromisoformat(v["expires"])
+                    if exp_dt > now:
+                        mac = await _resolve_mac(client_ip)
+                        if mac and mac.upper() != v.get("mac", "").upper():
+                            v["mac"] = mac.upper()
+                            v["ip"] = client_ip
+                            save_vouchers(vouchers)
+                            await unblock_device(mac)
+                            _dns_blocker.force_refresh()
+                        return {"active": True, "expires": v["expires"]}
+                except Exception:
+                    pass
+
+    # 2. Try resolving MAC for this IP
     mac = await _resolve_mac(client_ip)
     if mac:
-        now = datetime.now()
         for v in get_vouchers():
-            if v.get("mac", "").upper() == mac and v.get("status") == "active":
+            if v.get("mac", "").upper() == mac.upper() and v.get("status") == "active":
                 try:
                     exp_dt = datetime.fromisoformat(v["expires"])
                     if exp_dt > now:
@@ -393,16 +413,16 @@ async def my_status(request: Request):
                 except (ValueError, KeyError):
                     pass
         for w in get_whitelist():
-            if w["mac"].upper() == mac:
+            if w["mac"].upper() == mac.upper():
                 return {"active": True, "expires": None}
     
-    # Fallback: check by IP in devices list
+    # 3. Fallback: check by IP in devices list
     for d in get_devices_store():
         if d.get("ip") == client_ip and d.get("status") == "active":
             expires = d.get("expires")
             if expires:
                 try:
-                    if datetime.fromisoformat(expires) > datetime.now():
+                    if datetime.fromisoformat(expires) > now:
                         return {"active": True, "expires": expires}
                 except ValueError:
                     pass
@@ -618,6 +638,7 @@ async def unblock_device_route(mac: str):
         save_vouchers(vouchers)
 
     success = await unblock_device(mac)
+    _dns_blocker.force_refresh()
 
     devices_store = get_devices_store()
     for ds in devices_store:
@@ -675,9 +696,9 @@ async def get_whitelist_route():
 async def add_whitelist(entry: WhitelistEntry):
     wl = get_whitelist()
     
-    # Actively unblock on the router
-    # Run in the background so the HTTP response returns instantly
+    # Actively unblock on the router and refresh DNS blocker
     asyncio.create_task(unblock_device(entry.mac))
+    _dns_blocker.force_refresh()
 
     # Clear any explicit UI blocks in the devices_store
     devices_store = get_devices_store()
@@ -1314,6 +1335,10 @@ class DnsBlocker:
         except Exception as e:
             logger.error(f"❌ DNS Blocker error: {e}")
 
+    def force_refresh(self):
+        DnsBlocker._auth_cache_time = 0
+        self._refresh_auth_cache()
+
     def _loop(self):
         while self.running:
             try:
@@ -1343,16 +1368,25 @@ class DnsBlocker:
             is_auth = self._is_authorized(client_ip)
 
             if is_auth:
-                # Proxy to upstream DNS
-                try:
-                    psock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    psock.settimeout(3.0)
-                    psock.sendto(data, ("8.8.8.8", 53))
-                    resp_data, _ = psock.recvfrom(2048)
-                    self.sock.sendto(resp_data, addr)
-                    psock.close()
-                except Exception:
-                    pass
+                # Proxy to upstream DNS — try router gateway first (local LAN fast), then public DNS
+                router_ip = _detect_gateway_ip()
+                for upstream in [router_ip, "8.8.8.8", "1.1.1.1"]:
+                    psock = None
+                    try:
+                        psock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                        psock.settimeout(1.5)
+                        psock.sendto(data, (upstream, 53))
+                        resp_data, _ = psock.recvfrom(2048)
+                        self.sock.sendto(resp_data, addr)
+                        return
+                    except Exception:
+                        pass
+                    finally:
+                        if psock:
+                            try:
+                                psock.close()
+                            except Exception:
+                                pass
             else:
                 # Block — return our server IP for all A queries so users land on portal
                 if qtype == QTYPE.A:
@@ -1367,19 +1401,27 @@ class DnsBlocker:
         if ip in ("127.0.0.1", "::1"):
             return True
         config = self._cached_config()
-        if ip == config.get("serverIp", ""):
+        server_ip = (config.get("serverIp") or "").strip() or _get_server_ip()
+        if ip == server_ip:
             return True
+
+        # Check IP cache directly (fastest, solves cold ARP / pending MAC)
+        if hasattr(DnsBlocker, '_authorized_ips_cache') and ip in DnsBlocker._authorized_ips_cache:
+            return True
+
         mac = _mac_cache_get(ip)
         if not mac:
             # Try ARP table lookup for unknown IPs
             mac = self._arp_lookup(ip)
             if mac:
                 _mac_cache_set(ip, mac)
-            else:
-                return False  # Can't identify device — block it
-        mac = mac.upper()
-        # Check cached authorized MACs (refreshed every 5s)
-        return mac in self._authorized_macs_cache
+
+        if mac:
+            mac = mac.upper()
+            return mac in self._authorized_macs_cache
+
+        # If MAC could not be resolved yet, fallback to True if ANY active voucher has client_ip
+        return ip in DnsBlocker._authorized_ips_cache
 
     def _arp_lookup(self, ip):
         """Quick ARP table lookup to find MAC for an IP."""
@@ -1401,6 +1443,7 @@ class DnsBlocker:
     _config_cache = None
     _config_cache_time = 0
     _authorized_macs_cache = set()
+    _authorized_ips_cache = set()
     _auth_cache_time = 0
 
     def _cached_config(self):
@@ -1411,26 +1454,41 @@ class DnsBlocker:
         return DnsBlocker._config_cache
 
     def _refresh_auth_cache(self):
-        """Rebuild authorized MACs set from DB — called periodically."""
+        """Rebuild authorized MACs and IPs set from DB — called periodically or forced."""
         now_t = time.time()
-        if now_t - DnsBlocker._auth_cache_time < 5:
+        if now_t - DnsBlocker._auth_cache_time < 2:
             return
         DnsBlocker._auth_cache_time = now_t
         macs = set()
+        ips = set()
         try:
             for w in get_whitelist():
-                macs.add(w["mac"].upper())
+                if w.get("mac"):
+                    macs.add(w["mac"].upper())
+                if w.get("ip"):
+                    ips.add(w["ip"])
             now = datetime.now()
             for v in get_vouchers():
-                if v.get("mac", "").upper() and v.get("status") == "active":
+                if v.get("status") == "active":
                     try:
                         if datetime.fromisoformat(v["expires"]) > now:
-                            macs.add(v["mac"].upper())
+                            if v.get("mac"):
+                                macs.add(v["mac"].upper())
+                            if v.get("ip"):
+                                ips.add(v["ip"])
                     except Exception:
                         pass
+            # Also check devices_store for active items
+            for ds in get_devices_store():
+                if ds.get("status") == "active":
+                    if ds.get("mac"):
+                        macs.add(ds["mac"].upper())
+                    if ds.get("ip"):
+                        ips.add(ds["ip"])
         except Exception:
             pass
         DnsBlocker._authorized_macs_cache = macs
+        DnsBlocker._authorized_ips_cache = ips
 
     def stop(self):
         self.running = False
