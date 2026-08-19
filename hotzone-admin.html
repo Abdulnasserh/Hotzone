@@ -1877,14 +1877,17 @@
           sessionStorage.setItem('hz_admin_token', adminToken);
           unlockAdmin();
         } else {
-          pinError();
+          pinError('PIN si sahihi. Jaribu tena.');
         }
-      } catch (e) { pinError(); }
+      } catch (e) {
+        pinError('Seva haipatikani. Hakikisha app inafanya kazi.');
+      }
     }
 
-    function pinError() {
+    function pinError(msg) {
       const box = document.getElementById('pinDigits');
       const err = document.getElementById('pinError');
+      err.textContent = msg || 'PIN si sahihi. Jaribu tena.';
       box.classList.add('shake');
       err.classList.add('show');
       setTimeout(() => {
@@ -1893,7 +1896,7 @@
         digits.forEach(d => { d.value = ''; d.classList.remove('filled'); });
         digits[0].focus();
       }, 500);
-      setTimeout(() => err.classList.remove('show'), 3000);
+      setTimeout(() => err.classList.remove('show'), 4000);
     }
 
     function unlockAdmin() {

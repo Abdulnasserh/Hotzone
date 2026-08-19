@@ -353,9 +353,10 @@ async def serve_admin_page():
 async def verify_admin_pin(req: PinRequest):
     config = get_config()
     correct_pin = (config.get("adminPin") or "2004").strip()
+    # If stored value looks masked or non-numeric, fall back to default
     if correct_pin in ("••••", "****", "", None) or not correct_pin.isdigit():
         correct_pin = "2004"
-    if req.pin == correct_pin or req.pin == "2004":
+    if req.pin == correct_pin:
         token = str(uuid.uuid4())
         admin_sessions.add(token)
         return {"success": True, "token": token}
