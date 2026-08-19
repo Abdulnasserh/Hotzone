@@ -173,8 +173,6 @@ class ServerGUI(ctk.CTk):
                 target_port = 8000
 
             server._CURRENT_PORT = target_port
-            admin_url = "http://127.0.0.1/admin" if target_port == 80 else f"http://127.0.0.1:{target_port}/admin"
-            threading.Timer(1.5, lambda: webbrowser.open(admin_url)).start()
 
             config = uvicorn.Config(app=app, host="0.0.0.0", port=target_port, log_level="info")
             self.server_instance = uvicorn.Server(config=config)
@@ -185,11 +183,23 @@ class ServerGUI(ctk.CTk):
                 self.stop_server()
             self.after(0, show_error)
 
+    def _open_admin_browser(self):
+        try:
+            import server
+            port = getattr(server, "_CURRENT_PORT", 80)
+            url = f"http://127.0.0.1:{port}/admin" if port != 80 else "http://127.0.0.1/admin"
+            webbrowser.open(url)
+        except Exception:
+            pass
+
     def start_server(self):
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.import_btn.configure(state="disabled")
         self.status_label.configure(text="Server Status: RUNNING", text_color="#10B981")
+
+        # Open admin portal automatically after 2 seconds on main thread
+        self.after(2000, self._open_admin_browser)
 
         # Remind admin to press Washa System
         self.after(3000, self._remind_washa)

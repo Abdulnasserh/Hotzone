@@ -771,12 +771,16 @@ async def get_config_route():
 async def update_config(update: ConfigUpdate):
     config = get_config()
     for key, val in update.dict(exclude_none=True).items():
-        config[key] = val
+        sval = str(val).strip()
+        if sval in ("••••••••", "••••", "****", "********"):
+            continue  # Ignore dummy masked placeholder strings
+        config[key] = sval
     try:
         with _get_db() as conn:
             conn.execute("DELETE FROM config")
-            conn.executemany("INSERT INTO config (key, value) VALUES (?, ?)", [(k, str(v)) for k, v in config.items()])
+            conn.executemany("INSERT INTO config (key, value) VALUES (?, ?)", [(k, v) for k, v in config.items()])
     except Exception: pass
+    DnsBlocker._config_cache = None
     await ws_manager.broadcast({"type": "config_updated"})
     return {"status": "ok"}
 
