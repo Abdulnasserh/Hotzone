@@ -99,7 +99,9 @@ def _is_success(code) -> bool:
 
 async def _login(client, router_ip, config):
     global _ubus_session
-    password = config.get("routerPass", "")
+    password = (config.get("routerPass") or "").strip()
+    if password in ("••••••••", "••••", "****", "********", "", None):
+        password = "TPJSQK4K"
 
     code, data = await _ubus_call(client, router_ip, NULL_SESSION,
                                    "zwrt_web", "web_login_info")
