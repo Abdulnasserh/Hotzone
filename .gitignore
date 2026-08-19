@@ -8,3 +8,9 @@ HotZonePro.spec
 hotzone.db*
 router_api_capture.json
 reverse_engineer.py
+# Mac-only assets — not needed on Windows client
+*.icns
+hotzone.iconset/
+hotzone_icon.png
+mac_filtering_ui.png
+static/app_icon.png
