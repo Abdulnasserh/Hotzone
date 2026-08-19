@@ -137,13 +137,11 @@ $ctkPath = & $python -c "import customtkinter; import os; print(os.path.dirname(
     --add-data "license_manager.py;." `
     --add-data "router_scraper.py;." `
     --add-data "$ctkPath;customtkinter" `
-    --hidden-import "dnslib" `
     --hidden-import "license_manager" `
     --hidden-import "router_scraper" `
     --hidden-import "PIL._tkinter_finder" `
     --collect-all uvicorn `
     --collect-all fastapi `
-    --collect-all dnslib `
     gui.py
 
 if (-not (Test-Path "dist\HotZonePro\HotZonePro.exe")) {

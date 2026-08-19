@@ -16,7 +16,6 @@ import threading
 import socket
 import qrcode
 from qrcode.image.styledpil import StyledPilImage
-from dnslib import DNSRecord, QTYPE, RR, A
 
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
@@ -235,7 +234,6 @@ async def lifespan(app: FastAPI):
     try:
         if _enforcer_task:
             _enforcer_task.cancel()
-        _dns_blocker.stop()
         await shutdown_scraper()
         await pw_cleanup()
     except Exception as e:
@@ -399,7 +397,6 @@ async def my_status(request: Request, voucher_id: str = None):
                             v["ip"] = client_ip
                             save_vouchers(vouchers)
                             await unblock_device(mac)
-                            _dns_blocker.force_refresh()
                         return {"active": True, "expires": v["expires"]}
                 except Exception:
                     pass
@@ -627,7 +624,6 @@ async def unblock_device_route(mac: str):
         save_vouchers(vouchers)
 
     success = await unblock_device(mac)
-    _dns_blocker.force_refresh()
 
     devices_store = get_devices_store()
     for ds in devices_store:
@@ -687,7 +683,6 @@ async def add_whitelist(entry: WhitelistEntry):
     
     # Actively unblock on the router and refresh DNS blocker
     asyncio.create_task(unblock_device(entry.mac))
-    _dns_blocker.force_refresh()
 
     # Clear any explicit UI blocks in the devices_store
     devices_store = get_devices_store()
@@ -783,7 +778,6 @@ async def update_config(update: ConfigUpdate):
             conn.execute("DELETE FROM config")
             conn.executemany("INSERT INTO config (key, value) VALUES (?, ?)", [(k, v) for k, v in config.items()])
     except Exception: pass
-    DnsBlocker._config_cache = None
     await ws_manager.broadcast({"type": "config_updated"})
     return {"status": "ok"}
 
@@ -1232,7 +1226,6 @@ async def redeem_voucher_code(req: RedeemRequest, request: Request):
     await unblock_device(mac)
     
     # Also refresh DNS blocker cache so device gets internet immediately
-    DnsBlocker._auth_cache_time = 0  # Force cache refresh
 
     # Update state store
     devices_store = get_devices_store()
@@ -1276,551 +1269,6 @@ async def redeem_voucher_code(req: RedeemRequest, request: Request):
     response.set_cookie(key="hotzone_session", value=token, max_age=30*24*3600, httponly=True)
     
     return response
-
-# ---------------------------------------------------------------------------
-# DnsBlocker — lightweight DNS gatekeeper (no captive portal)
-# Blocks DNS for unauthorized devices so they can't reach the internet
-# Authorized devices get real DNS proxy to 8.8.8.8
-# Also blocks DoH (DNS-over-HTTPS) endpoints for ALL devices to prevent bypass
-# ---------------------------------------------------------------------------
-
-# Known DoH/DoT domains that bypass traditional DNS blocking
-_DOH_DOMAINS = {
-    "dns.google", "dns.google.com", "8.8.8.8.dns", "8.8.4.4.dns",
-    "cloudflare-dns.com", "one.one.one.one", "1dot1dot1dot1.cloudflare-dns.com",
-    "mozilla.cloudflare-dns.com", "firefox.dns.nextdns.io",
-    "dns.nextdns.io", "dns.quad9.net", "dns9.quad9.net",
-    "doh.opendns.com", "dns.adguard.com", "dns-unfiltered.adguard.com",
-    "doh.cleanbrowsing.org", "dns.controld.com", "freedns.controld.com",
-    "dns.mullvad.net", "doh.mullvad.net",
-    "dns.alidns.com", "doh.pub", "dns.twnic.tw",
-    "ordns.he.net", "dns.switch.ch",
-    "doh.xfinity.com", "doh.cox.net",
-    "security.cloudflare-dns.com", "family.cloudflare-dns.com",
-}
-
-# Known DoH server IPs — we return 0.0.0.0 for these to prevent HTTPS-based DNS bypass
-_DOH_IPS_BLOCK = {
-    "1.1.1.1", "1.0.0.1",           # Cloudflare
-    "8.8.8.8", "8.8.4.4",           # Google (block DoH only, we proxy regular DNS ourselves)
-    "9.9.9.9", "149.112.112.112",   # Quad9
-    "208.67.222.222", "208.67.220.220",  # OpenDNS
-    "94.140.14.14", "94.140.15.15",      # AdGuard
-    "185.228.168.9", "185.228.169.9",    # CleanBrowsing
-}
-
-class DnsBlocker:
-    def __init__(self):
-        self.running = False
-        self.sock = None
-
-    def start(self):
-        try:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.sock.bind(("0.0.0.0", 53))
-            self.sock.settimeout(1.0)
-            self.running = True
-            logger.info("📡 DNS Blocker listening on port 53")
-            threading.Thread(target=self._loop, daemon=True).start()
-        except PermissionError:
-            logger.error("❌ Port 53 requires sudo/admin. DNS blocking disabled.")
-        except Exception as e:
-            logger.error(f"❌ DNS Blocker error: {e}")
-
-    def force_refresh(self):
-        DnsBlocker._auth_cache_time = 0
-        self._refresh_auth_cache()
-
-    def _loop(self):
-        while self.running:
-            try:
-                self._refresh_auth_cache()
-                data, addr = self.sock.recvfrom(4096)
-                self._handle(data, addr)
-            except socket.timeout:
-                continue
-            except Exception:
-                pass
-
-    def _handle(self, data, addr):
-        client_ip = addr[0]
-        try:
-            request = DNSRecord.parse(data)
-            qname = str(request.q.qname).lower().rstrip('.')
-            qtype = request.q.qtype
-
-            # --- Block DoH domains for ALL clients (prevents DNS bypass) ---
-            if qname in _DOH_DOMAINS or any(qname.endswith("." + d) for d in _DOH_DOMAINS):
-                reply = request.reply()
-                if qtype == QTYPE.A:
-                    reply.add_answer(RR(qname + ".", QTYPE.A, rdata=A("0.0.0.0"), ttl=300))
-                self.sock.sendto(reply.pack(), addr)
-                return
-
-            is_auth = self._is_authorized(client_ip)
-
-            if is_auth:
-                # Proxy to upstream DNS — try router gateway first (local LAN fast), then public DNS
-                router_ip = _detect_gateway_ip()
-                for upstream in [router_ip, "8.8.8.8", "1.1.1.1"]:
-                    psock = None
-                    try:
-                        psock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                        psock.settimeout(1.5)
-                        psock.sendto(data, (upstream, 53))
-                        resp_data, _ = psock.recvfrom(2048)
-                        self.sock.sendto(resp_data, addr)
-                        return
-                    except Exception:
-                        pass
-                    finally:
-                        if psock:
-                            try:
-                                psock.close()
-                            except Exception:
-                                pass
-            else:
-                # Block — return our server IP for all A queries so users land on portal
-                if qtype == QTYPE.A:
-                    reply = request.reply()
-                    server_ip = _get_server_ip()
-                    reply.add_answer(RR(qname + ".", QTYPE.A, rdata=A(server_ip), ttl=1))
-                    self.sock.sendto(reply.pack(), addr)
-        except Exception:
-            pass
-
-    def _is_authorized(self, ip):
-        if ip in ("127.0.0.1", "::1"):
-            return True
-        config = self._cached_config()
-        server_ip = (config.get("serverIp") or "").strip() or _get_server_ip()
-        if ip == server_ip:
-            return True
-
-        # Check IP cache directly (fastest, solves cold ARP / pending MAC)
-        if hasattr(DnsBlocker, '_authorized_ips_cache') and ip in DnsBlocker._authorized_ips_cache:
-            return True
-
-        mac = _mac_cache_get(ip)
-        if mac:
-            mac = mac.upper()
-            return mac in self._authorized_macs_cache
-
-        # If MAC could not be resolved yet, fallback to True if ANY active voucher has client_ip
-        return ip in DnsBlocker._authorized_ips_cache
-
-    # --- Caching to avoid hammering SQLite on every DNS packet ---
-    _config_cache = None
-    _config_cache_time = 0
-    _authorized_macs_cache = set()
-    _authorized_ips_cache = set()
-    _auth_cache_time = 0
-
-    def _cached_config(self):
-        now = time.time()
-        if DnsBlocker._config_cache is None or now - DnsBlocker._config_cache_time > 10:
-            DnsBlocker._config_cache = get_config()
-            DnsBlocker._config_cache_time = now
-        return DnsBlocker._config_cache
-
-    def _refresh_auth_cache(self):
-        """Rebuild authorized MACs and IPs set from DB — called periodically or forced."""
-        now_t = time.time()
-        if now_t - DnsBlocker._auth_cache_time < 2:
-            return
-        DnsBlocker._auth_cache_time = now_t
-        macs = set()
-        ips = set()
-        try:
-            for w in get_whitelist():
-                if w.get("mac"):
-                    macs.add(w["mac"].upper())
-                if w.get("ip"):
-                    ips.add(w["ip"])
-            now = datetime.now()
-            for v in get_vouchers():
-                if v.get("status") == "active":
-                    try:
-                        if datetime.fromisoformat(v["expires"]) > now:
-                            if v.get("mac"):
-                                macs.add(v["mac"].upper())
-                            if v.get("ip"):
-                                ips.add(v["ip"])
-                    except Exception:
-                        pass
-            # Also check devices_store for active items
-            for ds in get_devices_store():
-                if ds.get("status") == "active":
-                    if ds.get("mac"):
-                        macs.add(ds["mac"].upper())
-                    if ds.get("ip"):
-                        ips.add(ds["ip"])
-        except Exception:
-            pass
-        DnsBlocker._authorized_macs_cache = macs
-        DnsBlocker._authorized_ips_cache = ips
-
-    def stop(self):
-        self.running = False
-        if self.sock:
-            try:
-                self.sock.close()
-            except Exception:
-                pass
-
-_dns_blocker = DnsBlocker()
-
-# ---------------------------------------------------------------------------
-# pf (macOS) DNS port redirection — forces all DNS traffic through blocker
-# ---------------------------------------------------------------------------
-
-def _get_primary_iface():
-    try:
-        r = subprocess.run(["route", "-n", "get", "default"], capture_output=True, text=True)
-        for line in r.stdout.splitlines():
-            if "interface:" in line:
-                return line.split(":")[1].strip()
-    except Exception:
-        pass
-    return "en0"
-
-def _detect_server_ip() -> str:
-    """Auto-detect this machine's primary LAN IP without hard-coding anything.
-    Cross-platform and works whether config has serverIp set or not."""
-    # 1. Fast native lookup per platform
-    try:
-        if platform.system() == "Windows":
-            r = subprocess.run(["ipconfig"], capture_output=True, text=True, timeout=3)
-            # IPv4 lines like: "IPv4 Address. . . . . . . . . . . : 192.168.0.153"
-            for line in r.stdout.splitlines():
-                if "IPv4" in line and ":" in line:
-                    ip = line.split(":")[-1].strip().split(" ")[-1].strip()
-                    if ip and ip.count(".") == 3 and not ip.startswith("169.254"):
-                        return ip
-        elif platform.system() == "Darwin":
-            r = subprocess.run(["ipconfig", "getifaddr", _get_primary_iface()],
-                               capture_output=True, text=True, timeout=3)
-            ip = r.stdout.strip()
-            if ip and ip.count(".") == 3:
-                return ip
-            r = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=3)
-            for m in re.finditer(r'inet (\d+\.\d+\.\d+\.\d+)', r.stdout):
-                ip = m.group(1)
-                if not ip.startswith("169.254") and not ip.startswith("127."):
-                    return ip
-        else:
-            r = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=3)
-            for tok in r.stdout.split():
-                if tok.count(".") == 3 and not tok.startswith("169.254"):
-                    return tok
-    except Exception:
-        pass
-    # 2. Socket trick: open UDP route towards gateway — OS picks our real NIC IP
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.settimeout(1)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        if ip and ip.count(".") == 3 and not ip.startswith("169.254"):
-            return ip
-    except Exception:
-        pass
-    # 3. Last resort: match any RFC1918 candidate from ifconfig/ipconfig
-    try:
-        rx = subprocess.run(["ipconfig" if platform.system() == "Windows" else "ifconfig"],
-                            capture_output=True, text=True, timeout=3)
-        for m in re.finditer(r'((?:192\.168\.|10\.|172\.(?:1[6-9]|2\d|3[01])\.).*?)\s|inet\s+(\d+\.\d+\.\d+\.\d+)',
-                             rx.stdout):
-            pass  # handled by per-platform branch above
-        for m in re.finditer(r'\b(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b',
-                             rx.stdout):
-            return m.group(1)
-    except Exception:
-        pass
-    return ""
-
-def _get_server_ip() -> str:
-    """Effective server IP: config value if set, otherwise auto-detect."""
-    cfg = get_config()
-    ip = (cfg.get("serverIp") or "").strip()
-    if ip and ip.count(".") == 3:
-        return ip
-    return _detect_server_ip()
-
-def _detect_gateway_ip() -> str:
-    """Auto-detect the default gateway (router) IP — cross-platform."""
-    try:
-        if platform.system() == "Windows":
-            r = subprocess.run(["ipconfig"], capture_output=True, text=True, timeout=3)
-            for line in r.stdout.splitlines():
-                if "Gateway" in line and ":" in line:
-                    ip = line.split(":")[-1].strip()
-                    if ip and ip.count(".") == 3:
-                        return ip
-            r = subprocess.run(["route", "print", "0.0.0.0"], capture_output=True, text=True, timeout=3)
-            for m in re.finditer(r'0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)', r.stdout):
-                return m.group(1)
-        else:
-            r = subprocess.run(["route", "-n", "get", "default"], capture_output=True, text=True, timeout=3)
-            for line in r.stdout.splitlines():
-                if "gateway:" in line:
-                    ip = line.split(":")[1].strip()
-                    if ip and ip.count(".") == 3:
-                        return ip
-    except Exception:
-        pass
-    try:
-        rx = subprocess.run(["ipconfig" if platform.system() == "Windows" else "ifconfig"],
-                            capture_output=True, text=True, timeout=3)
-        for m in re.finditer(r'\d+\.\d+\.\d+\.1\b', rx.stdout):
-            return m.group(0)
-    except Exception:
-        pass
-    return "192.168.1.1"
-
-_CURRENT_PORT = 8000  # fixed port — no port 80 on Windows (requires admin + kills IIS)
-
-def _portal_base_url() -> str:
-    """http://<ip>:8000/ — fixed port 8000."""
-    ip = _get_server_ip()
-    if not ip:
-        ip = "127.0.0.1"
-    return f"http://{ip}:8000/"
-
-def _get_server_mac():
-    """Return a MAC that belongs to this machine (uuid-based fallback)."""
-    try:
-        mac_num = uuid.getnode()
-        return ':'.join(("%012X" % mac_num)[i:i+2] for i in range(0, 12, 2)).upper()
-    except Exception:
-        return ""
-
-def _get_server_macs():
-    """Return ALL local NIC MACs for this machine (cross-platform).
-    Critical for Windows PCs with WiFi + Ethernet: blocking the server PC's
-    own MAC would cut the admin's internet. We collect every local MAC so the
-    enforcer never blocks any of them."""
-    macs = set()
-    try:
-        if platform.system() == "Windows":
-            r = subprocess.run(["getmac", "/fo", "csv", "/nh"], capture_output=True, text=True, timeout=5)
-            for m in re.finditer(r'([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}', r.stdout):
-                macs.add(m.group(0).replace("-", ":").upper())
-        else:
-            r = subprocess.run(["ifconfig", "-a"], capture_output=True, text=True, timeout=5)
-            for m in re.finditer(r'([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}', r.stdout):
-                macs.add(m.group(0).upper())
-    except Exception:
-        pass
-    if not macs:
-        macs.add(_get_server_mac())
-    return macs
-
-def _add_pf_dns_redirect():
-    if platform.system() != "Darwin":
-        return False
-    iface = _get_primary_iface()
-    rule = (
-        f"rdr pass on {iface} inet proto udp from any to any port 53 -> 127.0.0.1 port 53\n"
-        f"rdr pass on {iface} inet proto tcp from any to any port 8000 -> 127.0.0.1 port 8000\n"
-    )
-    try:
-        default_conf = "/etc/pf.conf"
-        pf_rules = ""
-        if os.path.exists(default_conf):
-            with open(default_conf) as f:
-                pf_rules = f.read()
-        lines = pf_rules.splitlines()
-        lines = [l for l in lines if "hotzone.hotspot" not in l]
-        pf_rules = "\n".join(lines).strip()
-        pf_rules += f"\nrdr-anchor \"com.hotzone.hotspot\"\n"
-        r = subprocess.run(["pfctl", "-ef", "-"], input=pf_rules, text=True, capture_output=True)
-        if r.returncode != 0:
-            logger.warning(f"⚠️ pf base load: {r.stderr.strip()}")
-        r2 = subprocess.run(["pfctl", "-a", "com.hotzone.hotspot", "-f", "-"], input=rule, text=True, capture_output=True)
-        if r2.returncode == 0:
-            logger.info(f"📡 pf redirect active on {iface}: UDP 53->53, TCP 8000->8000")
-            return True
-        else:
-            logger.warning(f"⚠️ pf anchor load failed: {r2.stderr.strip()}")
-            return False
-    except Exception as e:
-        logger.warning(f"⚠️ pf redirect failed: {e}")
-        return False
-
-def _remove_pf_dns_redirect():
-    if platform.system() != "Darwin":
-        return
-    try:
-        subprocess.run(["pfctl", "-a", "com.hotzone.hotspot", "-F", "all"], capture_output=True)
-        default_conf = "/etc/pf.conf"
-        if os.path.exists(default_conf):
-            subprocess.run(["pfctl", "-f", default_conf], capture_output=True)
-        logger.info("📡 pf redirect removed")
-    except Exception as e:
-        logger.warning(f"⚠️ pf restore failed: {e}")
-
-# ---------------------------------------------------------------------------
-# Windows Firewall — block DNS bypass + block DoH IPs
-# ---------------------------------------------------------------------------
-
-def _add_windows_firewall_rules():
-    """Only allow INBOUND ports 53 and 8000 so clients can reach DNS blocker and portal."""
-    if platform.system() != "Windows":
-        return False
-    try:
-        # Remove old rules first (idempotent)
-        for name in ["HotZone-BlockDNS", "HotZone-BlockDoH", "HotZone-AllowLocalDNS",
-                     "HotZone-AllowInboundDNS", "HotZone-AllowInboundHTTP"]:
-            subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=" + name],
-                          capture_output=True, text=True)
-
-        # Allow INBOUND port 53 UDP — so WiFi clients can reach our DNS Blocker
-        subprocess.run([
-            "netsh", "advfirewall", "firewall", "add", "rule",
-            "name=HotZone-AllowInboundDNS", "dir=in", "action=allow",
-            "protocol=UDP", "localport=53", "enable=yes"
-        ], capture_output=True, text=True)
-
-        # Allow INBOUND port 8000 TCP — so WiFi clients can reach the portal
-        subprocess.run([
-            "netsh", "advfirewall", "firewall", "add", "rule",
-            "name=HotZone-AllowInboundHTTP", "dir=in", "action=allow",
-            "protocol=TCP", "localport=8000", "enable=yes"
-        ], capture_output=True, text=True)
-
-        logger.info("🛡️ Windows Firewall: inbound DNS(53) + HTTP(8000) allowed for clients")
-        return True
-    except Exception as e:
-        logger.warning(f"⚠️ Windows Firewall rules failed: {e}")
-        return False
-
-def _remove_windows_firewall_rules():
-    """Remove HotZone firewall rules."""
-    if platform.system() != "Windows":
-        return
-    try:
-        for name in ["HotZone-BlockDNS", "HotZone-BlockDoH", "HotZone-AllowLocalDNS",
-                     "HotZone-AllowInboundDNS", "HotZone-AllowInboundHTTP"]:
-            subprocess.run(["netsh", "advfirewall", "firewall", "delete", "rule", "name=" + name],
-                          capture_output=True, text=True)
-        logger.info("🛡️ Windows Firewall: HotZone rules removed")
-    except Exception as e:
-        logger.warning(f"⚠️ Windows Firewall cleanup failed: {e}")
-
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# System Control — Washa System
-# ---------------------------------------------------------------------------
-
-@app.post("/api/system/start")
-async def system_start():
-    """Sync whitelist to router and enforce MAC filtering."""
-    try:
-        whitelist = get_whitelist()
-        vouchers = get_vouchers()
-        now = datetime.now()
-        active_macs = {w["mac"].upper() for w in whitelist}
-        
-        # Always include Server PC's MAC address
-        srv_mac = _get_server_mac()
-        if srv_mac:
-            active_macs.add(srv_mac)
-            logger.info(f"Server MAC: {srv_mac}")
-
-        for v in vouchers:
-            if v.get("status") == "active":
-                try:
-                    if datetime.fromisoformat(v["expires"]) > now:
-                        active_macs.add(v["mac"].upper())
-                except Exception:
-                    pass
-
-        logger.info(f"Washa System: {len(active_macs)} authorized MACs: {active_macs}")
-        allowed_list = [{"mac": mac} for mac in active_macs]
-
-        if active_macs:
-            logger.info("Syncing whitelist to router...")
-            ok = await sync_whitelist_to_router(allowed_list)
-            logger.info(f"sync_whitelist_to_router result: {ok}")
-            if ok:
-                await purge_unauthorized_macs(active_macs)
-        else:
-            ok = False
-            logger.warning("⚠️ Whitelist iko tupu — hakuna MAC iliyoruhusiwa. Ongeza MAC yako kwenye whitelist kwanza!")
-
-        # Set router DHCP to use this server as DNS
-        config = get_config()
-        server_ip = _get_server_ip()
-        await set_dhcp_dns(server_ip)
-        _add_pf_dns_redirect()
-        _add_windows_firewall_rules()
-        # NO ARP spoofing by design. The router DROP gate blocks lan→wan for
-        # unauthorized MACs; customers reach the portal by typing the server IP
-        # manually (LAN→LAN traffic is not gated by DROP, only lan→wan is).
-        global _enforcer_task
-        if not _enforcer_task or _enforcer_task.done():
-            _enforcer_task = asyncio.create_task(expiry_enforcer())
-            logger.info("✅ Expiry enforcer started")
-        if not _dns_blocker.running:
-            _dns_blocker.start()
-
-        status = "ok" if ok else "error"
-        logger.info(f"Washa System final status: {status}, allowed_count: {len(active_macs)}")
-        return {"status": status, "allowed_count": len(active_macs), "whitelist_empty": len(active_macs) == 0}
-    except Exception as e:
-        logger.error(f"System start failed: {e}", exc_info=True)
-        return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
-
-@app.post("/api/system/stop")
-async def system_stop():
-    """Stop enforcement — cancels expiry enforcer, disables router whitelist mode, and stops DNS blocker."""
-    global _enforcer_task
-    if _enforcer_task and not _enforcer_task.done():
-        _enforcer_task.cancel()
-        _enforcer_task = None
-        logger.info("⛔ Expiry enforcer stopped")
-    if _dns_blocker.running:
-        _dns_blocker.stop()
-        logger.info("⛔ DNS blocker stopped")
-    # Remove pf redirect
-    _remove_pf_dns_redirect()
-    # Remove Windows Firewall rules
-    _remove_windows_firewall_rules()
-    # Restore router to Allow-All mode
-    await disable_whitelist_mode()
-    return {"status": "stopped"}
-
-@app.get("/api/system/status")
-async def system_status():
-    """Check if router is reachable and whitelist is active."""
-    try:
-        from router_scraper import scrape_devices
-        devices = await scrape_devices()
-        router_ok = len(devices) > 0
-        return {
-            "router_connected": router_ok,
-            "device_count": len(devices)
-        }
-    except Exception as e:
-        return {"router_connected": False, "device_count": 0, "error": str(e)}
-
-# In-memory log buffer for admin UI
-_log_buffer = []
-_log_handler = None
-
-class _BufferHandler(logging.Handler):
-    def emit(self, record):
-        from datetime import datetime as _dt
-        _log_buffer.append({
-            "time": _dt.now().strftime("%H:%M:%S"),
-            "level": record.levelname,
-            "msg": record.getMessage()
-        })
-        if len(_log_buffer) > 200:
-            _log_buffer.pop(0)
 
 def _setup_log_buffer():
     global _log_handler
@@ -1881,10 +1329,6 @@ async def router_restore():
         if _enforcer_task and not _enforcer_task.done():
             _enforcer_task.cancel()
             _enforcer_task = None
-        if _dns_blocker.running:
-            _dns_blocker.stop()
-        _remove_pf_dns_redirect()
-        _remove_windows_firewall_rules()
 
         # 2. Restore router to open mode
         ok = await disable_whitelist_mode()
@@ -2249,10 +1693,6 @@ if __name__ == "__main__":
     # 1. Cleanup on Ctrl+C before exit
     def _force_exit(sig, frame):
         print("\n🛑 Server stopping... cleaning up...")
-        _remove_pf_dns_redirect()
-        _remove_windows_firewall_rules()
-        if _dns_blocker.running:
-            _dns_blocker.stop()
         os._exit(0)
     signal.signal(signal.SIGINT, _force_exit)
     signal.signal(signal.SIGTERM, _force_exit)
