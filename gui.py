@@ -159,36 +159,21 @@ class ServerGUI(ctk.CTk):
 
     def run_uvicorn(self):
         try:
-            import server, socket
+            import server
             app = server.app
-            server._free_port_80()
-            
-            target_port = 80
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                s.bind(("0.0.0.0", 80))
-                s.close()
-            except Exception:
-                target_port = 8000
-
-            server._CURRENT_PORT = target_port
-
-            config = uvicorn.Config(app=app, host="0.0.0.0", port=target_port, log_level="info")
+            server._CURRENT_PORT = 8000
+            config = uvicorn.Config(app=app, host="0.0.0.0", port=8000, log_level="info")
             self.server_instance = uvicorn.Server(config=config)
             self.server_instance.run()
         except Exception as e:
             def show_error():
-                messagebox.showerror("Server Crash", f"The server failed to start:\n\n{str(e)}\n\n(It may be blocked by a Firewall, Port 80 or 8000 is used, or data is inaccessible)")
+                messagebox.showerror("Server Crash", f"The server failed to start:\n\n{str(e)}\n\nMake sure port 8000 is not already in use.")
                 self.stop_server()
             self.after(0, show_error)
 
     def _open_admin_browser(self):
         try:
-            import server
-            port = getattr(server, "_CURRENT_PORT", 80)
-            url = f"http://127.0.0.1:{port}/admin" if port != 80 else "http://127.0.0.1/admin"
-            webbrowser.open(url)
+            webbrowser.open("http://127.0.0.1:8000/admin")
         except Exception:
             pass
 

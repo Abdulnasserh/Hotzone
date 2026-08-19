@@ -1580,15 +1580,14 @@ def _detect_gateway_ip() -> str:
         pass
     return "192.168.1.1"
 
-_CURRENT_PORT = 80  # updated at startup to the port uvicorn actually binds
+_CURRENT_PORT = 8000  # fixed port — no port 80 on Windows (requires admin + kills IIS)
 
 def _portal_base_url() -> str:
-    """http://<ip>[:port]/ — uses the REAL bound port, never hard-codes 8000."""
+    """http://<ip>:8000/ — fixed port 8000."""
     ip = _get_server_ip()
-    port = _CURRENT_PORT
-    if port == 80:
-        return f"http://{ip}/"
-    return f"http://{ip}:{port}/"
+    if not ip:
+        ip = "127.0.0.1"
+    return f"http://{ip}:8000/"
 
 def _get_server_mac():
     """Return a MAC that belongs to this machine (uuid-based fallback)."""
@@ -1625,7 +1624,7 @@ def _add_pf_dns_redirect():
     iface = _get_primary_iface()
     rule = (
         f"rdr pass on {iface} inet proto udp from any to any port 53 -> 127.0.0.1 port 53\n"
-        f"rdr pass on {iface} inet proto tcp from any to any port 80 -> 127.0.0.1 port {_CURRENT_PORT}\n"
+        f"rdr pass on {iface} inet proto tcp from any to any port 8000 -> 127.0.0.1 port 8000\n"
     )
     try:
         default_conf = "/etc/pf.conf"
@@ -1642,7 +1641,7 @@ def _add_pf_dns_redirect():
             logger.warning(f"⚠️ pf base load: {r.stderr.strip()}")
         r2 = subprocess.run(["pfctl", "-a", "com.hotzone.hotspot", "-f", "-"], input=rule, text=True, capture_output=True)
         if r2.returncode == 0:
-            logger.info(f"📡 pf redirect active on {iface}: UDP 53->53, TCP 80->80")
+            logger.info(f"📡 pf redirect active on {iface}: UDP 53->53, TCP 8000->8000")
             return True
         else:
             logger.warning(f"⚠️ pf anchor load failed: {r2.stderr.strip()}")
@@ -1668,9 +1667,7 @@ def _remove_pf_dns_redirect():
 # ---------------------------------------------------------------------------
 
 def _add_windows_firewall_rules():
-    """Only allow INBOUND ports 53 and 80 so clients can reach DNS blocker and portal.
-    Never add outbound block rules — they only affect the server PC itself, not other devices,
-    and they break the server PC's own internet connection."""
+    """Only allow INBOUND ports 53 and 8000 so clients can reach DNS blocker and portal."""
     if platform.system() != "Windows":
         return False
     try:
@@ -1687,14 +1684,14 @@ def _add_windows_firewall_rules():
             "protocol=UDP", "localport=53", "enable=yes"
         ], capture_output=True, text=True)
 
-        # Allow INBOUND ports 80 and 8000 TCP — so WiFi clients can reach the portal page regardless of bound port
+        # Allow INBOUND port 8000 TCP — so WiFi clients can reach the portal
         subprocess.run([
             "netsh", "advfirewall", "firewall", "add", "rule",
             "name=HotZone-AllowInboundHTTP", "dir=in", "action=allow",
-            "protocol=TCP", "localport=80,8000", "enable=yes"
+            "protocol=TCP", "localport=8000", "enable=yes"
         ], capture_output=True, text=True)
 
-        logger.info("🛡️ Windows Firewall: inbound DNS(53) + HTTP(80,8000) allowed for clients")
+        logger.info("🛡️ Windows Firewall: inbound DNS(53) + HTTP(8000) allowed for clients")
         return True
     except Exception as e:
         logger.warning(f"⚠️ Windows Firewall rules failed: {e}")
@@ -2249,18 +2246,9 @@ if __name__ == "__main__":
     import platform
     import subprocess
     
-    def _free_port_80():
-        if platform.system() == "Windows":
-            try:
-                subprocess.run(["net", "stop", "W3SVC", "/y"], capture_output=True, text=True, timeout=3)
-            except Exception:
-                pass
-    _free_port_80()
-    
     # 1. Cleanup on Ctrl+C before exit
     def _force_exit(sig, frame):
         print("\n🛑 Server stopping... cleaning up...")
-        # Cleanup network modifications
         _remove_pf_dns_redirect()
         _remove_windows_firewall_rules()
         if _dns_blocker.running:
@@ -2269,23 +2257,14 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, _force_exit)
     signal.signal(signal.SIGTERM, _force_exit)
 
-    # 2. Start Web Portal on Port 80 (or fallback 8000)
-    logger.info("🚀 Starting Web Portal...")
-    target_port = 80
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("0.0.0.0", 80))
-        s.close()
-    except Exception:
-        target_port = 8000
-
-    _CURRENT_PORT = target_port
-    admin_url = "http://127.0.0.1/admin" if target_port == 80 else f"http://127.0.0.1:{target_port}/admin"
+    # 2. Start Web Portal on port 8000 (stable, no admin rights needed)
+    logger.info("🚀 Starting Web Portal on port 8000...")
+    _CURRENT_PORT = 8000
+    admin_url = "http://127.0.0.1:8000/admin"
     def _open_admin():
-        time.sleep(1.5)
+        time.sleep(2)
         logger.info(f"🌐 Opening admin: {admin_url}")
         webbrowser.open(admin_url)
 
     threading.Thread(target=_open_admin, daemon=True).start()
-    uvicorn.run(app, host="0.0.0.0", port=target_port, log_level="info", reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info", reload=False)
