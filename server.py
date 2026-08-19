@@ -429,9 +429,110 @@ async def my_status(request: Request, voucher_id: str = None):
     return {"active": False}
 
 # ---------------------------------------------------------------------------
-# IP→MAC mapping cache — TTL-based so stale entries (e.g. Samsung MAC
-# rotation after reconnect) are never served forever.
+# Network helpers — detect server IP, MAC, gateway
 # ---------------------------------------------------------------------------
+
+def _get_primary_iface() -> str:
+    try:
+        r = subprocess.run(["route", "get", "default"], capture_output=True, text=True, timeout=3)
+        for line in r.stdout.splitlines():
+            if "interface:" in line:
+                return line.split()[-1]
+    except Exception:
+        pass
+    return "en0"
+
+def _detect_server_ip() -> str:
+    """Auto-detect this machine's primary LAN IP — cross-platform."""
+    try:
+        if platform.system() == "Windows":
+            r = subprocess.run(["ipconfig"], capture_output=True, text=True, timeout=5)
+            for m in re.finditer(r'IPv4 Address[.\s]+:\s+(\d+\.\d+\.\d+\.\d+)', r.stdout):
+                ip = m.group(1)
+                if not ip.startswith("169.254") and not ip.startswith("127."):
+                    return ip
+        elif platform.system() == "Darwin":
+            r = subprocess.run(["ipconfig", "getifaddr", _get_primary_iface()],
+                               capture_output=True, text=True, timeout=3)
+            ip = r.stdout.strip()
+            if ip and ip.count(".") == 3:
+                return ip
+            r = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=3)
+            for m in re.finditer(r'inet (\d+\.\d+\.\d+\.\d+)', r.stdout):
+                ip = m.group(1)
+                if not ip.startswith("169.254") and not ip.startswith("127."):
+                    return ip
+    except Exception:
+        pass
+    # Socket trick — works on all platforms
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(1)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and ip.count(".") == 3 and not ip.startswith("169.254"):
+            return ip
+    except Exception:
+        pass
+    return ""
+
+def _detect_gateway_ip() -> str:
+    """Auto-detect the default gateway IP — cross-platform."""
+    try:
+        if platform.system() == "Windows":
+            r = subprocess.run(["ipconfig"], capture_output=True, text=True, timeout=5)
+            for m in re.finditer(r'Default Gateway[.\s]+:\s+(\d+\.\d+\.\d+\.\d+)', r.stdout):
+                return m.group(1)
+        else:
+            r = subprocess.run(["route", "-n", "get", "default"], capture_output=True, text=True, timeout=3)
+            for line in r.stdout.splitlines():
+                if "gateway:" in line:
+                    return line.split()[-1]
+    except Exception:
+        pass
+    return "192.168.1.1"
+
+def _get_server_ip() -> str:
+    """Effective server IP: config value if set, otherwise auto-detect."""
+    try:
+        cfg = get_config()
+        ip = (cfg.get("serverIp") or "").strip()
+        if ip and ip.count(".") == 3 and not ip.startswith("0."):
+            return ip
+    except Exception:
+        pass
+    return _detect_server_ip()
+
+def _get_server_mac() -> str:
+    """Return this machine's primary MAC address."""
+    try:
+        import uuid as _uuid
+        raw = hex(_uuid.getnode())[2:].upper().zfill(12)
+        return ":".join(raw[i:i+2] for i in range(0, 12, 2))
+    except Exception:
+        return ""
+
+def _get_server_macs() -> set:
+    """Return all MAC addresses belonging to this machine."""
+    macs = set()
+    try:
+        import uuid as _uuid
+        raw = hex(_uuid.getnode())[2:].upper().zfill(12)
+        macs.add(":".join(raw[i:i+2] for i in range(0, 12, 2)))
+    except Exception:
+        pass
+    return macs
+
+def _portal_base_url() -> str:
+    """http://<server-ip>:8000/"""
+    ip = _get_server_ip() or "127.0.0.1"
+    return f"http://{ip}:8000/"
+
+# ---------------------------------------------------------------------------
+# IP→MAC mapping cache — TTL-based
+# ---------------------------------------------------------------------------
+
 _MAC_CACHE_TTL = 30  # seconds — short enough to catch rotation, long enough to not hammer router
 _ip_to_mac: dict[str, tuple[str, float]] = {}  # ip -> (mac, timestamp)
 
@@ -1528,6 +1629,74 @@ async def ws_endpoint(websocket: WebSocket):
 # ---------------------------------------------------------------------------
 # Background task — device monitoring
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# System Control — Washa / Zima System
+# ---------------------------------------------------------------------------
+
+@app.post("/api/system/start")
+async def system_start():
+    """Sync whitelist + active vouchers to router and enable MAC filtering."""
+    try:
+        whitelist = get_whitelist()
+        vouchers  = get_vouchers()
+        now       = datetime.now()
+        active_macs = {w["mac"].upper() for w in whitelist}
+
+        # Always include server PC's own MAC
+        srv_mac = _get_server_mac()
+        if srv_mac:
+            active_macs.add(srv_mac)
+
+        # Include all currently active (non-expired) voucher MACs
+        for v in vouchers:
+            if v.get("status") == "active":
+                try:
+                    if datetime.fromisoformat(v["expires"]) > now:
+                        active_macs.add(v["mac"].upper())
+                except Exception:
+                    pass
+
+        logger.info(f"Washa System: {len(active_macs)} authorized MACs")
+        allowed_list = [{"mac": mac} for mac in active_macs]
+
+        if active_macs:
+            ok = await sync_whitelist_to_router(allowed_list)
+            if ok:
+                await purge_unauthorized_macs(active_macs)
+        else:
+            ok = False
+            logger.warning("⚠️ Whitelist empty — add your MAC to the whitelist first!")
+
+        global _enforcer_task
+        if not _enforcer_task or _enforcer_task.done():
+            _enforcer_task = asyncio.create_task(expiry_enforcer())
+            logger.info("✅ Expiry enforcer started")
+
+        status = "ok" if ok else "error"
+        return {"status": status, "allowed_count": len(active_macs), "whitelist_empty": len(active_macs) == 0}
+    except Exception as e:
+        logger.error(f"System start failed: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
+
+
+@app.post("/api/system/stop")
+async def system_stop():
+    """Stop enforcement — cancel enforcer and disable router whitelist mode."""
+    global _enforcer_task
+    if _enforcer_task and not _enforcer_task.done():
+        _enforcer_task.cancel()
+        _enforcer_task = None
+    await disable_whitelist_mode()
+    return {"status": "stopped"}
+
+
+@app.get("/api/system/status")
+async def system_status():
+    """Return whether the expiry enforcer is running."""
+    running = bool(_enforcer_task and not _enforcer_task.done())
+    return {"running": running}
+
 
 # ---------------------------------------------------------------------------
 # Background task — expiry enforcer (DB-driven, independent of scrape)
