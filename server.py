@@ -1378,7 +1378,7 @@ class DnsBlocker:
                 if qtype == QTYPE.A:
                     reply = request.reply()
                     server_ip = _get_server_ip()
-                    reply.add_answer(RR(qname + ".", QTYPE.A, rdata=A(server_ip), ttl=60))
+                    reply.add_answer(RR(qname + ".", QTYPE.A, rdata=A(server_ip), ttl=1))
                     self.sock.sendto(reply.pack(), addr)
         except Exception:
             pass
@@ -1618,7 +1618,7 @@ def _add_pf_dns_redirect():
     iface = _get_primary_iface()
     rule = (
         f"rdr pass on {iface} inet proto udp from any to any port 53 -> 127.0.0.1 port 53\n"
-        f"rdr pass on {iface} inet proto tcp from any to any port 80 -> 127.0.0.1 port 80\n"
+        f"rdr pass on {iface} inet proto tcp from any to any port 80 -> 127.0.0.1 port {_CURRENT_PORT}\n"
     )
     try:
         default_conf = "/etc/pf.conf"
@@ -1680,14 +1680,14 @@ def _add_windows_firewall_rules():
             "protocol=UDP", "localport=53", "enable=yes"
         ], capture_output=True, text=True)
 
-        # Allow INBOUND port 80 TCP — so WiFi clients can reach the portal page
+        # Allow INBOUND ports 80 and 8000 TCP — so WiFi clients can reach the portal page regardless of bound port
         subprocess.run([
             "netsh", "advfirewall", "firewall", "add", "rule",
             "name=HotZone-AllowInboundHTTP", "dir=in", "action=allow",
-            "protocol=TCP", "localport=80", "enable=yes"
+            "protocol=TCP", "localport=80,8000", "enable=yes"
         ], capture_output=True, text=True)
 
-        logger.info("🛡️ Windows Firewall: inbound DNS(53) + HTTP(80) allowed for clients")
+        logger.info("🛡️ Windows Firewall: inbound DNS(53) + HTTP(80,8000) allowed for clients")
         return True
     except Exception as e:
         logger.warning(f"⚠️ Windows Firewall rules failed: {e}")
@@ -2239,6 +2239,16 @@ if __name__ == "__main__":
     import time
     import webbrowser
     import threading
+    import platform
+    import subprocess
+    
+    def _free_port_80():
+        if platform.system() == "Windows":
+            try:
+                subprocess.run(["net", "stop", "W3SVC", "/y"], capture_output=True, text=True, timeout=3)
+            except Exception:
+                pass
+    _free_port_80()
     
     # 1. Cleanup on Ctrl+C before exit
     def _force_exit(sig, frame):

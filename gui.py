@@ -161,6 +161,7 @@ class ServerGUI(ctk.CTk):
         try:
             import server
             app = server.app
+            server._free_port_80()
             # Attempt Port 80 first
             try:
                 server._CURRENT_PORT = 80
